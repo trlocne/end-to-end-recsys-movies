@@ -61,7 +61,7 @@ spec:
       - name: tune-epochs
         value: "2"
       - name: max-concurrent-trials
-        value: "2"
+        value: "4"
       - name: num-epochs-gnn
         value: "10"
       - name: num-epochs-rerank
@@ -69,9 +69,9 @@ spec:
       - name: batch-size
         value: "256"
       - name: gnn-num-workers
-        value: "2"
+        value: "4"
       - name: rerank-num-workers
-        value: "2"
+        value: "4"
 
       # --- Hyperparameters: GNN ---
       - name: lr-gnn
@@ -572,19 +572,15 @@ spec:
                     - |
                       set -e
                       echo "Starting Glue Job..."
+                      GLUE_ARGS=$(printf '{"--RATINGS_PATH":"%s/rating.csv","--OUTPUT_PATH":"%s/glue_output","--EXISTING_USERS_MAP_PATH":"%s/users_map.csv","--EXISTING_ITEMS_MAP_PATH":"%s/items_map.csv","--POSTGRES_HOST":"pg-30130064-seanhcmut05.c.aivencloud.com","--POSTGRES_PORT":"27400","--POSTGRES_DB":"defaultdb","--POSTGRES_USER":"avnadmin","--POSTGRES_PASSWORD":"%s"}' \
+                        "{{inputs.parameters.raw-path}}" \
+                        "{{workflow.parameters.s3-run-path}}" \
+                        "{{inputs.parameters.raw-path}}" \
+                        "{{inputs.parameters.raw-path}}" \
+                        "$POSTGRES_PASSWORD")
                       JOB_RUN_ID=$(aws glue start-job-run \
                         --job-name {{inputs.parameters.job}} \
-                        --arguments '{
-                          "--RATINGS_PATH":"{{inputs.parameters.raw-path}}/rating.csv",
-                          "--OUTPUT_PATH":"{{workflow.parameters.s3-run-path}}/glue_output",
-                          "--EXISTING_USERS_MAP_PATH":"{{inputs.parameters.raw-path}}/users_map.csv",
-                          "--EXISTING_ITEMS_MAP_PATH":"{{inputs.parameters.raw-path}}/items_map.csv",
-                          "--POSTGRES_HOST":"pg-30130064-seanhcmut05.c.aivencloud.com",
-                          "--POSTGRES_PORT":"27400",
-                          "--POSTGRES_DB":"defaultdb",
-                          "--POSTGRES_USER":"avnadmin",
-                          "--POSTGRES_PASSWORD":"$POSTGRES_PASSWORD"
-                        }' \
+                        --arguments "$GLUE_ARGS" \
                         --query 'JobRunId' --output text)
                       
                       echo "Started Glue Job Run ID: $JOB_RUN_ID"
