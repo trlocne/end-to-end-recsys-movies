@@ -155,10 +155,6 @@ spec:
       - name: incremental-config-path
         value: "s3://recsys-moivelens/processed/production/incremental_config.yaml"
 
-      # --- Serving-update passthrough params ---
-      # gnn-model-name / reranker-model-name / s3-base-path mirror registry-name-gnn,
-      # registry-name-rerank, s3-raw-path so that serving-update-dag templateRef can
-      # resolve {{workflow.parameters.*}} from the calling workflow's spec.arguments.
       - name: correlation-id
         value: ""
       - name: gnn-model-name
@@ -570,7 +566,7 @@ spec:
                       valueFrom:
                         secretKeyRef:
                           name: postgres-creds
-                          key: password
+                          key: DB_PASSWORD
                   command: ["sh", "-c"]
                   args:
                     - |
