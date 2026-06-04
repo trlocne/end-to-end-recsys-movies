@@ -1,0 +1,24 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: recsys-mlflow
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/trlocne/end-to-end-recommendation-system.git
+    targetRevision: main
+    path: deployments/helm/infra/mlflow
+    helm:
+      releaseName: recsys-mlflow
+      valueFiles:
+        - values.do.yaml   # DigitalOcean cluster — đổi thành values.aws.yaml nếu dùng EKS
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: mlflow
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

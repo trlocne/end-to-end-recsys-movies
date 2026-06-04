@@ -1,0 +1,22 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: recsys-triton
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/trlocne/end-to-end-recommendation-system.git
+    targetRevision: main
+    path: deployments/helm/platform/triton
+    helm:
+      releaseName: recsys-triton
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: serving
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

@@ -1,0 +1,22 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: recsys-ui
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/trlocne/end-to-end-recommendation-system.git
+    targetRevision: main
+    path: deployments/helm/apps/recsys-ui
+    helm:
+      releaseName: recsys-ui
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: serving
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

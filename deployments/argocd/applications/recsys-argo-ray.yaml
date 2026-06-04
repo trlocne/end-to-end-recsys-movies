@@ -1,0 +1,22 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: recsys-argo-ray
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/trlocne/end-to-end-recommendation-system.git
+    targetRevision: main
+    path: deployments/helm/platform/argo-ray
+    helm:
+      releaseName: recsys-argo-ray
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argo
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
