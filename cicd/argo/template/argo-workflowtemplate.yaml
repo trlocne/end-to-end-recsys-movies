@@ -155,6 +155,28 @@ spec:
       - name: incremental-config-path
         value: "s3://recsys-moivelens/processed/production/incremental_config.yaml"
 
+      # --- Serving-update passthrough params ---
+      - name: gnn-model-alias
+        value: "production"
+      - name: gnn-model-version-override
+        value: ""
+      - name: reranker-model-version-override
+        value: ""
+      - name: incremental-users-only
+        value: "true"
+      - name: milvus-max-collections
+        value: "5"
+      - name: collection-retention-days
+        value: "7"
+      - name: serving-config-path
+        value: "s3://recsys-moivelens/processed/production/serving_config.yaml"
+      - name: serving-namespace
+        value: "serving"
+      - name: serving-deployment
+        value: "serving"
+      - name: use-gpu-triton
+        value: "false"
+
   templates:
     - name: training-pipeline-dag
       dag:
@@ -436,15 +458,41 @@ spec:
                 - name: gnn-model-name
                   value: "{{workflow.parameters.registry-name-gnn}}"
                 - name: gnn-model-alias
-                  value: "production"
+                  value: "{{workflow.parameters.gnn-model-alias}}"
+                - name: gnn-model-version-override
+                  value: "{{workflow.parameters.gnn-model-version-override}}"
                 - name: reranker-model-name
                   value: "{{workflow.parameters.registry-name-rerank}}"
+                - name: reranker-model-version-override
+                  value: "{{workflow.parameters.reranker-model-version-override}}"
                 - name: s3-base-path
                   value: "{{workflow.parameters.s3-raw-path}}"
                 - name: correlation-id
                   value: "{{workflow.uid}}"
                 - name: incremental-config-path
                   value: "{{workflow.parameters.incremental-config-path}}"
+                - name: incremental-users-only
+                  value: "{{workflow.parameters.incremental-users-only}}"
+                - name: milvus-uri
+                  value: "{{workflow.parameters.milvus-uri}}"
+                - name: milvus-token
+                  value: "{{workflow.parameters.milvus-token}}"
+                - name: milvus-max-collections
+                  value: "{{workflow.parameters.milvus-max-collections}}"
+                - name: collection-retention-days
+                  value: "{{workflow.parameters.collection-retention-days}}"
+                - name: es-uri
+                  value: "{{workflow.parameters.es-uri}}"
+                - name: es-api-key
+                  value: "{{workflow.parameters.es-api-key}}"
+                - name: serving-config-path
+                  value: "{{workflow.parameters.serving-config-path}}"
+                - name: serving-namespace
+                  value: "{{workflow.parameters.serving-namespace}}"
+                - name: serving-deployment
+                  value: "{{workflow.parameters.serving-deployment}}"
+                - name: use-gpu-triton
+                  value: "{{workflow.parameters.use-gpu-triton}}"
     - name: feast-historical-retrieval-template
       inputs:
         parameters:
