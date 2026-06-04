@@ -156,6 +156,15 @@ spec:
         value: "s3://recsys-moivelens/processed/production/incremental_config.yaml"
 
       # --- Serving-update passthrough params ---
+      # gnn-model-name / reranker-model-name / s3-base-path mirror registry-name-gnn,
+      # registry-name-rerank, s3-raw-path so that serving-update-dag templateRef can
+      # resolve {{workflow.parameters.*}} from the calling workflow's spec.arguments.
+      - name: gnn-model-name
+        value: "Recsys-GNN"
+      - name: reranker-model-name
+        value: "Recsys-ReRank"
+      - name: s3-base-path
+        value: "s3://recsys-moivelens/processed/dev"
       - name: gnn-model-alias
         value: "production"
       - name: gnn-model-version-override
@@ -456,17 +465,17 @@ spec:
                 - name: mlflow-tracking-uri
                   value: "{{workflow.parameters.mlflow-tracking-uri}}"
                 - name: gnn-model-name
-                  value: "{{workflow.parameters.registry-name-gnn}}"
+                  value: "{{workflow.parameters.gnn-model-name}}"
                 - name: gnn-model-alias
                   value: "{{workflow.parameters.gnn-model-alias}}"
                 - name: gnn-model-version-override
                   value: "{{workflow.parameters.gnn-model-version-override}}"
                 - name: reranker-model-name
-                  value: "{{workflow.parameters.registry-name-rerank}}"
+                  value: "{{workflow.parameters.reranker-model-name}}"
                 - name: reranker-model-version-override
                   value: "{{workflow.parameters.reranker-model-version-override}}"
                 - name: s3-base-path
-                  value: "{{workflow.parameters.s3-raw-path}}"
+                  value: "{{workflow.parameters.s3-base-path}}"
                 - name: correlation-id
                   value: "{{workflow.uid}}"
                 - name: incremental-config-path
