@@ -152,6 +152,8 @@ spec:
         value: "s3://recsys-moivelens/processed/feature_repo"
       - name: feast-output-path
         value: "{{workflow.parameters.s3-run-path}}/training_data"
+      - name: incremental-config-path
+        value: "s3://recsys-moivelens/processed/production/incremental_config.yaml"
 
   templates:
     - name: training-pipeline-dag
@@ -442,7 +444,7 @@ spec:
                 - name: correlation-id
                   value: "{{workflow.uid}}"
                 - name: incremental-config-path
-                  value: "s3://recsys-moivelens/processed/production/incremental_config.yaml"
+                  value: "{{workflow.parameters.incremental-config-path}}"
     - name: feast-historical-retrieval-template
       inputs:
         parameters:
