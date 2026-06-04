@@ -1,0 +1,843 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: training-template
+  namespace: argo
+spec:
+  entrypoint: training-pipeline-dag
+  serviceAccountName: argo-workflow-sa
+  podGC:
+    strategy: OnWorkflowCompletion
+    deleteDelayDuration: "3600s"
+  ttlStrategy:
+    secondsAfterSuccess: 604800
+    secondsAfterFailure: 1209600
+  arguments:
+    parameters:
+      - name: s3-raw-path
+        value: "s3://recsys-moivelens/processed/dev"
+      - name: registry
+        value: "trlocne204"
+      - name: es-api-key
+        value: ""
+      - name: mlflow-tracking-uri
+        value: "http://mlflow.mlflow.svc.cluster.local:5000"
+      - name: mlflow-experiment
+        value: "recsys-moivelens"
+      - name: registry-name-gnn
+        value: "Recsys-GNN"
+      - name: registry-name-rerank
+        value: "Recsys-ReRank"
+      - name: milvus-uri
+        value: "http://milvus.infra.svc.cluster.local:19530"
+      - name: milvus-token
+        value: ""
+      - name: es-uri
+        value: "http://elasticsearch.infra.svc.cluster.local:9200"
+      - name: s3-run-path
+        value: "s3://recsys-moivelens/processed/runs/{{workflow.uid}}"
+      - name: model-name
+        value: "Recsys-ReRank"
+      - name: model-stage
+        value: "Staging"
+      - name: model-artifact-path
+        value: "reranker_model"
+      - name: run-serving-update
+        value: "true"
+      - name: metric-key
+        value: "val_loss"
+      - name: metric-threshold
+        value: "0.1"
+
+      - name: job-name-glue
+        value: "recsys-pyspark-preprocess"
+
+      - name: run-preprocess
+        value: "true"
+      - name: skip-tune
+        value: "false"
+      - name: tune-samples
+        value: "3"
+      - name: tune-epochs
+        value: "2"
+      - name: max-concurrent-trials
+        value: "2"
+      - name: num-epochs-gnn
+        value: "10"
+      - name: num-epochs-rerank
+        value: "10"
+      - name: batch-size
+        value: "256"
+      - name: gnn-num-workers
+        value: "2"
+      - name: rerank-num-workers
+        value: "2"
+
+      # --- Hyperparameters: GNN ---
+      - name: lr-gnn
+        value: "1e-3"
+      - name: embed-dim-gnn
+        value: "64"
+      - name: num-layers-gnn
+        value: "3"
+      - name: reg-weight-gnn
+        value: "1e-4"
+
+      # --- Hyperparameters: Re-ranker ---
+      - name: lr-rerank
+        value: "1e-3"
+      - name: embed-dim-rerank
+        value: "128"
+      - name: dropout-rerank
+        value: "0.3"
+      - name: weight-decay-rerank
+        value: "1e-3"
+
+      # --- Dataset & Indexing ---
+      - name: val-ratio
+        value: "0.1"
+      - name: test-ratio
+        value: "0.1"
+      - name: milvus-collection
+        value: "movie_embeddings"
+      - name: es-index
+        value: "recsys-movies"
+
+      # --- Resources (Container) ---
+      - name: cpu-limit
+        value: "1"
+      - name: memory-limit
+        value: "2Gi"
+      - name: cpu-request
+        value: "500m"
+      - name: memory-request
+        value: "1Gi"
+
+      # --- Resources: Ray Head ---
+      - name: cpu-limit-head
+        value: "4"
+      - name: memory-limit-head
+        value: "8Gi"
+      - name: cpu-request-head
+        value: "2"
+      - name: memory-request-head
+        value: "4Gi"
+
+      # --- Resources: Ray Worker ---
+      - name: cpu-limit-worker
+        value: "4"
+      - name: memory-limit-worker
+        value: "8Gi"
+      - name: cpu-request-worker
+        value: "2"
+      - name: memory-request-worker
+        value: "4Gi"
+      - name: gpu-limit-worker
+        value: "0"
+      - name: gpu-request-worker
+        value: "0"
+      - name: ray-data-parallelism
+        value: "2"
+      - name: use-reuse-actors
+        value: "false"
+      - name: num-items
+        value: "3952"
+
+      - name: karpenter
+        value: "false"
+
+      - name: feast-training-config
+        value: "configs/training/reranker_features.yaml"  # or gnn_features.yaml
+      - name: feast-repo-path
+        value: "s3://recsys-moivelens/processed/feature_repo"
+      - name: feast-output-path
+        value: "{{workflow.parameters.s3-run-path}}/training_data"
+
+  templates:
+    - name: training-pipeline-dag
+      dag:
+        failFast: true
+        tasks:
+          - name: run-feast-historical-retrieval
+            template: feast-historical-retrieval-template
+            arguments:
+              parameters:
+                - name: config
+                  value: "{{workflow.parameters.feast-training-config}}"
+                - name: feast-repo-path
+                  value: "{{workflow.parameters.feast-repo-path}}"
+                - name: start-date
+                  value: ""
+                - name: end-date
+                  value: ""
+                - name: output-path
+                  value: "{{workflow.parameters.s3-run-path}}/tmp/feast_output"
+
+          - name: run-glue-preprocess-job
+            depends: run-feast-historical-retrieval
+            template: glue-job-template
+            arguments:
+              parameters:
+                - name: job-name
+                  value: "recsys-preprocess-{{workflow.uid}}"
+                - name: raw-path
+                  value: "{{workflow.parameters.s3-run-path}}/tmp/feast_output"
+                - name: job
+                  value: "{{workflow.parameters.job-name-glue}}"
+
+          - name: run-data-prep
+            depends: run-glue-preprocess-job
+            template: run-python-step-template
+            arguments:
+              parameters:
+                - name: image
+                  value: "{{workflow.parameters.registry}}/data-prep:latest"
+                - name: args
+                  value: >-
+                    --glue-output-path {{workflow.parameters.s3-run-path}}/glue_output
+                    --feast-repo-path /app/src/feature_repo
+                    --output-path {{workflow.parameters.s3-run-path}}/data_prep
+                    --val-ratio {{workflow.parameters.val-ratio}}
+                    --test-ratio {{workflow.parameters.test-ratio}}
+
+          - name: run-gnn-data-preprocess
+            depends: run-data-prep
+            template: run-shell-step-template
+            when: "{{workflow.parameters.run-preprocess}} == true"
+            arguments:
+              parameters:
+                - name: image
+                  value: "{{workflow.parameters.registry}}/train-jobs:latest"
+                - name: command
+                  value: "python train_gnn.py"
+                - name: args
+                  value: >-
+                    --preprocess-only
+                    --preprocess-output {{workflow.parameters.s3-run-path}}/data_prep/train_processed.parquet
+                    --data-path-glue {{workflow.parameters.s3-run-path}}/data_prep
+                    --data-path-data-prep {{workflow.parameters.s3-run-path}}/data_prep
+                    --ray-data-parallelism {{workflow.parameters.ray-data-parallelism}}
+
+          - name: run-gnn-training-cpu
+            depends: "run-gnn-data-preprocess.Succeeded || run-gnn-data-preprocess.Skipped"
+            template: run-ray-job-cpu-template
+            when: "{{workflow.parameters.gpu-request-worker}} == 0"
+            arguments:
+              parameters:
+                - name: job-name
+                  value: "gnn-cpu-{{workflow.uid}}"
+                - name: image
+                  value: "{{workflow.parameters.registry}}/train-jobs:latest"
+                - name: num-workers
+                  value: "{{workflow.parameters.gnn-num-workers}}"
+                - name: args
+                  value: >-
+                    --data-path-glue {{workflow.parameters.s3-run-path}}/data_prep
+                    --data-path-data-prep {{workflow.parameters.s3-run-path}}/data_prep
+                    --processed-data-path {{workflow.parameters.s3-run-path}}/data_prep/train_processed.parquet
+                    --feature-file {{workflow.parameters.s3-run-path}}/data_prep/features.pt
+                    --model-output {{workflow.parameters.s3-run-path}}/gnn_training/gnn.pt
+                    --mlflow-uri {{workflow.parameters.mlflow-tracking-uri}}
+                    --mlflow-exp {{workflow.parameters.mlflow-experiment}}
+                    --name-registry {{workflow.parameters.registry-name-gnn}}
+                    --pipeline-run-id {{workflow.uid}}
+                    --dataset-version {{workflow.parameters.s3-run-path}}
+                    --num-epochs {{workflow.parameters.num-epochs-gnn}}
+                    --tune-samples {{workflow.parameters.tune-samples}}
+                    --tune-epochs {{workflow.parameters.tune-epochs}}
+                    --max-concurrent-trials {{workflow.parameters.max-concurrent-trials}}
+                    --batch-size {{workflow.parameters.batch-size}}
+                    --num-workers {{workflow.parameters.gnn-num-workers}}
+                    --lr {{workflow.parameters.lr-gnn}}
+                    --embed-dim {{workflow.parameters.embed-dim-gnn}}
+                    --num-layers {{workflow.parameters.num-layers-gnn}}
+                    --reg-weight {{workflow.parameters.reg-weight-gnn}}
+                    --ray-data-parallelism {{workflow.parameters.ray-data-parallelism}}
+                    {{= workflow.parameters['use-reuse-actors'] == 'true' ? '--use-reuse-actors' : ''}}
+                    {{= workflow.parameters['skip-tune'] == 'true' ? '--skip-tune' : ''}}
+
+          - name: run-gnn-training-gpu
+            depends: "run-gnn-data-preprocess.Succeeded || run-gnn-data-preprocess.Skipped"
+            template: run-ray-job-gpu-template
+            when: "{{workflow.parameters.gpu-request-worker}} > 0"
+            arguments:
+              parameters:
+                - name: job-name
+                  value: "gnn-gpu-{{workflow.uid}}"
+                - name: image
+                  value: "{{workflow.parameters.registry}}/train-jobs:latest"
+                - name: num-workers
+                  value: "{{workflow.parameters.gnn-num-workers}}"
+                - name: args
+                  value: >-
+                    --data-path-glue {{workflow.parameters.s3-run-path}}/data_prep
+                    --data-path-data-prep {{workflow.parameters.s3-run-path}}/data_prep
+                    --processed-data-path {{workflow.parameters.s3-run-path}}/data_prep/train_processed.parquet
+                    --feature-file {{workflow.parameters.s3-run-path}}/data_prep/features.pt
+                    --model-output {{workflow.parameters.s3-run-path}}/gnn_training/gnn.pt
+                    --mlflow-uri {{workflow.parameters.mlflow-tracking-uri}}
+                    --mlflow-exp {{workflow.parameters.mlflow-experiment}}
+                    --name-registry {{workflow.parameters.registry-name-gnn}}
+                    --pipeline-run-id {{workflow.uid}}
+                    --dataset-version {{workflow.parameters.s3-run-path}}
+                    --num-epochs {{workflow.parameters.num-epochs-gnn}}
+                    --tune-samples {{workflow.parameters.tune-samples}}
+                    --tune-epochs {{workflow.parameters.tune-epochs}}
+                    --max-concurrent-trials {{workflow.parameters.max-concurrent-trials}}
+                    --batch-size {{workflow.parameters.batch-size}}
+                    --num-workers {{workflow.parameters.gnn-num-workers}}
+                    --lr {{workflow.parameters.lr-gnn}}
+                    --embed-dim {{workflow.parameters.embed-dim-gnn}}
+                    --num-layers {{workflow.parameters.num-layers-gnn}}
+                    --reg-weight {{workflow.parameters.reg-weight-gnn}}
+                    --ray-data-parallelism {{workflow.parameters.ray-data-parallelism}}
+                    {{= workflow.parameters['use-reuse-actors'] == 'true' ? '--use-reuse-actors' : ''}}
+                    {{= workflow.parameters['skip-tune'] == 'true' ? '--skip-tune' : ''}}
+
+          - name: run-indexing
+            depends: "run-gnn-training-cpu || run-gnn-training-gpu"
+            template: run-python-step-template
+            arguments:
+              parameters:
+                - name: image
+                  value: "{{workflow.parameters.registry}}/indexing:latest"
+                - name: args
+                  value: >-
+                    --embedding-path {{workflow.parameters.s3-run-path}}/gnn_training/movie_embeddings.parquet
+                    --metadata-path {{workflow.parameters.s3-run-path}}/data_prep/movies_metadata.parquet
+                    --milvus-uri {{workflow.parameters.milvus-uri}}
+                    --milvus-token {{workflow.parameters.milvus-token}}
+                    --milvus-collection {{workflow.parameters.milvus-collection}}
+                    --es-uri {{workflow.parameters.es-uri}}
+                    --es-api-key {{workflow.parameters.es-api-key}}
+                    --es-index {{workflow.parameters.es-index}}
+
+          - name: run-reranker-training-cpu
+            depends: "run-indexing"
+            template: run-ray-job-cpu-template
+            when: "{{workflow.parameters.gpu-request-worker}} == 0"
+            arguments:
+              parameters:
+                - name: job-name
+                  value: "rnk-cpu-{{workflow.uid}}"
+                - name: image
+                  value: "{{workflow.parameters.registry}}/train-jobs:latest"
+                - name: entrypoint
+                  value: "python /app/train_reranker.py"
+                - name: num-workers
+                  value: "{{workflow.parameters.rerank-num-workers}}"
+                - name: args
+                  value: >-
+                    --data-path-glue {{workflow.parameters.s3-run-path}}/data_prep
+                    --data-path-data-prep {{workflow.parameters.s3-run-path}}/data_prep
+                    --feature-file {{workflow.parameters.s3-run-path}}/data_prep/features.pt
+                    --feature-rerank-file {{workflow.parameters.s3-run-path}}/data_prep/feature_rerank.pt
+                    --gnn-model {{workflow.parameters.s3-run-path}}/gnn_training/gnn.pt
+                    --model-output {{workflow.parameters.s3-run-path}}/reranker_output/reranker.pt
+                    --mlflow-uri {{workflow.parameters.mlflow-tracking-uri}}
+                    --mlflow-exp {{workflow.parameters.mlflow-experiment}}
+                    --name-registry {{workflow.parameters.registry-name-rerank}}
+                    --pipeline-run-id {{workflow.uid}}
+                    --dataset-version {{workflow.parameters.s3-run-path}}
+                    --num-epochs {{workflow.parameters.num-epochs-rerank}}
+                    --tune-samples {{workflow.parameters.tune-samples}}
+                    --tune-epochs {{workflow.parameters.tune-epochs}}
+                    --max-concurrent-trials {{workflow.parameters.max-concurrent-trials}}
+                    --batch-size {{workflow.parameters.batch-size}}
+                    --num-workers {{workflow.parameters.rerank-num-workers}}
+                    --lr {{workflow.parameters.lr-rerank}}
+                    --embed-dim {{workflow.parameters.embed-dim-rerank}}
+                    --dropout {{workflow.parameters.dropout-rerank}}
+                    --weight-decay {{workflow.parameters.weight-decay-rerank}}
+                    --ray-data-parallelism {{workflow.parameters.ray-data-parallelism}}
+                    {{= workflow.parameters['use-reuse-actors'] == 'true' ? '--use-reuse-actors' : ''}}
+                    {{= workflow.parameters['skip-tune'] == 'true' ? '--skip-tune' : ''}}
+
+          - name: run-reranker-training-gpu
+            depends: "run-indexing"
+            template: run-ray-job-gpu-template
+            when: "{{workflow.parameters.gpu-request-worker}} > 0"
+            arguments:
+              parameters:
+                - name: job-name
+                  value: "rnk-gpu-{{workflow.uid}}"
+                - name: image
+                  value: "{{workflow.parameters.registry}}/train-jobs:latest"
+                - name: entrypoint
+                  value: "python /app/train_reranker.py"
+                - name: num-workers
+                  value: "{{workflow.parameters.rerank-num-workers}}"
+                - name: args
+                  value: >-
+                    --data-path-glue {{workflow.parameters.s3-run-path}}/data_prep
+                    --data-path-data-prep {{workflow.parameters.s3-run-path}}/data_prep
+                    --feature-file {{workflow.parameters.s3-run-path}}/data_prep/features.pt
+                    --feature-rerank-file {{workflow.parameters.s3-run-path}}/data_prep/feature_rerank.pt
+                    --gnn-model {{workflow.parameters.s3-run-path}}/gnn_training/gnn.pt
+                    --model-output {{workflow.parameters.s3-run-path}}/reranker_output/reranker.pt
+                    --mlflow-uri {{workflow.parameters.mlflow-tracking-uri}}
+                    --mlflow-exp {{workflow.parameters.mlflow-experiment}}
+                    --name-registry {{workflow.parameters.registry-name-rerank}}
+                    --pipeline-run-id {{workflow.uid}}
+                    --dataset-version {{workflow.parameters.s3-run-path}}
+                    --num-epochs {{workflow.parameters.num-epochs-rerank}}
+                    --tune-samples {{workflow.parameters.tune-samples}}
+                    --tune-epochs {{workflow.parameters.tune-epochs}}
+                    --max-concurrent-trials {{workflow.parameters.max-concurrent-trials}}
+                    --batch-size {{workflow.parameters.batch-size}}
+                    --num-workers {{workflow.parameters.rerank-num-workers}}
+                    --lr {{workflow.parameters.lr-rerank}}
+                    --embed-dim {{workflow.parameters.embed-dim-rerank}}
+                    --dropout {{workflow.parameters.dropout-rerank}}
+                    --weight-decay {{workflow.parameters.weight-decay-rerank}}
+                    --ray-data-parallelism {{workflow.parameters.ray-data-parallelism}}
+                    {{= workflow.parameters['use-reuse-actors'] == 'true' ? '--use-reuse-actors' : ''}}
+                    {{= workflow.parameters['skip-tune'] == 'true' ? '--skip-tune' : ''}}
+
+          - name: run-validate-release
+            depends: "run-reranker-training-cpu || run-reranker-training-gpu"
+            template: run-shell-step-template
+            arguments:
+              parameters:
+                - name: image
+                  value: "{{workflow.parameters.registry}}/train-jobs:latest"
+                - name: command
+                  value: "python scripts/validate_release.py"
+                - name: args
+                  value: ""
+            # env injected via secretRef aws-creds + explicit env in shell-step-template
+
+          - name: run-promote-models
+            depends: "run-validate-release"
+            template: run-shell-step-template
+            arguments:
+              parameters:
+                - name: image
+                  value: "{{workflow.parameters.registry}}/train-jobs:latest"
+                - name: command
+                  value: "python scripts/promote_models.py"
+                - name: args
+                  value: ""
+
+          - name: run-serving-update-embedded
+            depends: "run-promote-models"
+            when: "{{workflow.parameters.run-serving-update}} == true"
+            templateRef:
+              name: serving-update
+              template: serving-update-dag
+            arguments:
+              parameters:
+                - name: registry
+                  value: "{{workflow.parameters.registry}}"
+                - name: mlflow-tracking-uri
+                  value: "{{workflow.parameters.mlflow-tracking-uri}}"
+                - name: gnn-model-name
+                  value: "{{workflow.parameters.registry-name-gnn}}"
+                - name: gnn-model-alias
+                  value: "production"
+                - name: reranker-model-name
+                  value: "{{workflow.parameters.registry-name-rerank}}"
+                - name: s3-base-path
+                  value: "{{workflow.parameters.s3-raw-path}}"
+                - name: correlation-id
+                  value: "{{workflow.uid}}"
+                - name: incremental-config-path
+                  value: "s3://recsys-moivelens/processed/production/incremental_config.yaml"
+    - name: feast-historical-retrieval-template
+      inputs:
+        parameters:
+          - name: config
+          - name: feast-repo-path
+          - name: start-date
+          - name: end-date
+          - name: output-path
+      nodeSelector:
+        kubernetes.io/os: linux
+        kubernetes.io/arch: amd64
+      container:
+        image: "{{workflow.parameters.registry}}/train-jobs:latest"
+        command: ["python", "/app/src/training/full_retrain.py"]
+        args:
+          - "--config"
+          - "/app/{{inputs.parameters.config}}"
+          - "--feast-repo-path"
+          - "/app/{{inputs.parameters.feast-repo-path}}"
+          - "--start-date"
+          - "{{inputs.parameters.start-date}}"
+          - "--end-date"
+          - "{{inputs.parameters.end-date}}"
+          - "--output-path"
+          - "{{inputs.parameters.output-path}}"
+        resources:
+          limits:   { cpu: "2", memory: "4Gi" }
+          requests: { cpu: "1", memory: "2Gi" }
+        envFrom:
+          - secretRef: { name: aws-creds }
+        env:
+          - name: FEAST_REPO_PATH
+            value: "/app/{{inputs.parameters.feast-repo-path}}"
+      outputs:
+        parameters:
+          - name: output-path
+            value: "{{inputs.parameters.output-path}}"
+
+    - name: glue-job-template
+      inputs:
+        parameters:
+          - name: job-name
+          - name: raw-path
+          - name: job
+      resource:
+        action: create
+        successCondition: status.succeeded > 0
+        failureCondition: status.failed > 0
+        manifest: |
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            generateName: {{inputs.parameters.job-name}}-
+          spec:
+            template:
+              spec:
+                containers:
+                - name: glue-trigger
+                  image: amazon/aws-cli:latest
+                  envFrom:
+                    - secretRef: { name: aws-creds }
+                  env:
+                    - name: POSTGRES_PASSWORD
+                      valueFrom:
+                        secretKeyRef:
+                          name: postgres-creds
+                          key: password
+                  command: ["sh", "-c"]
+                  args:
+                    - |
+                      set -e
+                      echo "Starting Glue Job..."
+                      JOB_RUN_ID=$(aws glue start-job-run \
+                        --job-name {{inputs.parameters.job}} \
+                        --arguments '{
+                          "--RATINGS_PATH":"{{inputs.parameters.raw-path}}/rating.csv",
+                          "--OUTPUT_PATH":"{{workflow.parameters.s3-run-path}}/glue_output",
+                          "--EXISTING_USERS_MAP_PATH":"{{inputs.parameters.raw-path}}/users_map.csv",
+                          "--EXISTING_ITEMS_MAP_PATH":"{{inputs.parameters.raw-path}}/items_map.csv",
+                          "--POSTGRES_HOST":"pg-30130064-seanhcmut05.c.aivencloud.com",
+                          "--POSTGRES_PORT":"27400",
+                          "--POSTGRES_DB":"defaultdb",
+                          "--POSTGRES_USER":"avnadmin",
+                          "--POSTGRES_PASSWORD":"$POSTGRES_PASSWORD"
+                        }' \
+                        --query 'JobRunId' --output text)
+                      
+                      echo "Started Glue Job Run ID: $JOB_RUN_ID"
+                      
+                      # Custom Polling Loop
+                      while true; do
+                        STATUS=$(aws glue get-job-run --job-name {{inputs.parameters.job}} --run-id $JOB_RUN_ID --query 'JobRun.JobRunState' --output text)
+                        echo "Current Status: $STATUS"
+                        
+                        if [ "$STATUS" = "SUCCEEDED" ]; then
+                          echo "Glue Job Finished Successfully!"
+                          break
+                        elif [ "$STATUS" = "FAILED" ] || [ "$STATUS" = "STOPPED" ] || [ "$STATUS" = "TIMEOUT" ]; then
+                          echo "Glue Job Failed with status: $STATUS"
+                          exit 1
+                        fi
+                        
+                        echo "Waiting 30 seconds..."
+                        sleep 30
+                      done
+                restartPolicy: Never
+            backoffLimit: 1
+
+    - name: run-python-step-template
+      inputs:
+        parameters:
+          - name: image
+          - name: args
+      nodeSelector:
+        kubernetes.io/os: linux
+        kubernetes.io/arch: amd64
+      container:
+        image: "{{inputs.parameters.image}}"
+        command: ["sh", "-c"]
+        args: ["python main.py {{inputs.parameters.args}}"]
+        resources:
+          limits:   { cpu: "1", memory: "2Gi" }
+          requests: { cpu: "500m", memory: "1Gi" }
+        envFrom:
+          - secretRef: { name: aws-creds }
+        volumeMounts:
+          - mountPath: /dev/shm
+            name: dshm
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+
+
+    - name: run-shell-step-template
+      inputs:
+        parameters:
+          - name: image
+          - name: command
+          - name: args
+      nodeSelector:
+        kubernetes.io/os: linux
+        kubernetes.io/arch: amd64
+      container:
+        image: "{{inputs.parameters.image}}"
+        command: ["sh", "-c"]
+        args: ["{{inputs.parameters.command}} {{inputs.parameters.args}}"]
+        resources:
+          limits:   { cpu: "1", memory: "8Gi" }
+          requests: { cpu: "500m", memory: "4Gi" }
+        envFrom:
+          - secretRef: { name: aws-creds }
+        env:
+          - name: MLFLOW_TRACKING_URI
+            value: "{{workflow.parameters.mlflow-tracking-uri}}"
+          - name: MODEL_NAME
+            value: "{{workflow.parameters.registry-name-rerank}}"
+          - name: GNN_MODEL_NAME
+            value: "{{workflow.parameters.registry-name-gnn}}"
+          - name: MODEL_ALIAS
+            value: "champion"
+          - name: PRODUCTION_ALIAS
+            value: "production"
+          - name: CORRELATION_ID
+            value: "{{workflow.uid}}"
+          - name: GRAFANA_URL
+            valueFrom:
+              secretKeyRef:
+                name: monitoring-creds
+                key: grafana-url
+                optional: true
+          - name: GRAFANA_API_KEY
+            valueFrom:
+              secretKeyRef:
+                name: monitoring-creds
+                key: grafana-api-key
+                optional: true
+          - name: SLACK_WEBHOOK_URL
+            valueFrom:
+              secretKeyRef:
+                name: monitoring-creds
+                key: slack-webhook-url
+                optional: true
+        volumeMounts:
+          - mountPath: /dev/shm
+            name: dshm
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+
+    - name: run-ray-job-cpu-template
+      inputs:
+        parameters:
+          - name: job-name
+          - name: image
+          - name: num-workers
+          - name: args
+          - name: entrypoint
+            value: "python /app/train_gnn.py"
+      resource:
+        action: create
+        successCondition: "status.succeeded > 0"
+        failureCondition: "status.failed > 0"
+        manifest: |
+          apiVersion: ray.io/v1
+          kind: RayJob
+          metadata:
+            name: {{inputs.parameters.job-name}}
+          spec:
+            backoffLimit: 0
+            entrypoint: sh -c "{{inputs.parameters.entrypoint}} {{inputs.parameters.args}}"
+            shutdownAfterJobFinishes: true
+            ttlSecondsAfterFinished: 90
+            rayClusterSpec:
+              rayVersion: '2.54.0'
+              headGroupSpec:
+                rayStartParams:
+                  dashboard-host: '0.0.0.0'
+                  num-cpus: '0'
+                  object-store-memory: '2147483648' # 2Gi
+
+                template:
+                  spec:
+                    nodeSelector:
+                      kubernetes.io/os: linux
+                      kubernetes.io/arch: amd64
+                    tolerations:
+                      - key: CriticalAddonsOnly
+                        operator: Exists
+                        effect: NoSchedule
+                    containers:
+                      - name: ray-head
+                        image: {{inputs.parameters.image}}
+                        imagePullPolicy: Always
+                        env:
+                          - name: MALLOC_CONF
+                            value: "background_thread:false"
+                          - name: OMP_NUM_THREADS
+                            value: "1"
+                        resources:
+                          limits:
+                            cpu: "{{workflow.parameters.cpu-limit-head}}"
+                            memory: "{{workflow.parameters.memory-limit-head}}"
+                          requests:
+                            cpu: "{{workflow.parameters.cpu-request-head}}"
+                            memory: "{{workflow.parameters.memory-request-head}}"
+                        envFrom:
+                          - secretRef: { name: aws-creds }
+                        ports:
+                          - containerPort: 6379
+                            name: gcs-server
+                          - containerPort: 8265
+                            name: dashboard
+                          - containerPort: 10001
+                            name: client
+              workerGroupSpecs:
+                - replicas: {{inputs.parameters.num-workers}}
+                  groupName: train-group
+                  rayStartParams:
+                    num-cpus: "{{workflow.parameters.cpu-limit-worker}}"
+                    object-store-memory: '1610612736' # 1.5Gi
+                  template:
+                    spec:
+                      nodeSelector:
+                        kubernetes.io/os: linux
+                        kubernetes.io/arch: amd64
+                      tolerations:
+                        - key: CriticalAddonsOnly
+                          operator: Exists
+                          effect: NoSchedule
+                      containers:
+                        - name: ray-worker
+                          image: {{inputs.parameters.image}}
+                          imagePullPolicy: Always
+                          env:
+                            - name: MALLOC_CONF
+                              value: "background_thread:false"
+                            - name: OMP_NUM_THREADS
+                              value: "1"
+                          envFrom:
+                            - secretRef: { name: aws-creds }
+                          resources:
+                            limits:
+                              cpu: "{{workflow.parameters.cpu-limit-worker}}"
+                              memory: "{{workflow.parameters.memory-limit-worker}}"
+                            requests:
+                              cpu: "{{workflow.parameters.cpu-request-worker}}"
+                              memory: "{{workflow.parameters.memory-request-worker}}"
+
+    - name: run-ray-job-gpu-template
+      inputs:
+        parameters:
+          - name: job-name
+          - name: image
+          - name: num-workers
+          - name: args
+          - name: entrypoint
+            value: "python /app/train_gnn.py"
+      resource:
+        action: create
+        successCondition: status.succeeded > 0
+        failureCondition: status.failed > 0
+        manifest: |
+          apiVersion: ray.io/v1
+          kind: RayJob
+          metadata:
+            name: {{inputs.parameters.job-name}}
+          spec:
+            activeDeadlineSeconds: 86400
+            backoffLimit: 0
+            entrypoint: sh -c "{{inputs.parameters.entrypoint}} {{inputs.parameters.args}}"
+            shutdownAfterJobFinishes: true
+            ttlSecondsAfterFinished: 90
+            rayClusterSpec:
+              rayVersion: '2.54.0'
+              headGroupSpec:
+                rayStartParams:
+                  dashboard-host: '0.0.0.0'
+                  num-cpus: '0'
+                template:
+                  spec:
+                    nodeSelector:
+                      kubernetes.io/os: linux
+                      kubernetes.io/arch: amd64
+                    tolerations:
+                      - key: CriticalAddonsOnly
+                        operator: Exists
+                        effect: NoSchedule
+                    containers:
+                      - name: ray-head
+                        image: {{inputs.parameters.image}}
+                        imagePullPolicy: Always
+                        env:
+                          - name: MALLOC_CONF
+                            value: "background_thread:false"
+                          - name: OMP_NUM_THREADS
+                            value: "1"
+                        resources:
+                          limits:
+                            cpu: "{{workflow.parameters.cpu-limit-head}}"
+                            memory: "{{workflow.parameters.memory-limit-head}}"
+                          requests:
+                            cpu: "{{workflow.parameters.cpu-request-head}}"
+                            memory: "{{workflow.parameters.memory-request-head}}"
+                        envFrom:
+                          - secretRef: { name: aws-creds }
+                        ports:
+                          - containerPort: 6379
+                            name: gcs-server
+                          - containerPort: 8265
+                            name: dashboard
+                          - containerPort: 10001
+                            name: client
+              workerGroupSpecs:
+                - replicas: {{inputs.parameters.num-workers}}
+                  groupName: train-group
+                  rayStartParams:
+                    object-store-memory: '1610612736' # 1.5Gi
+
+                  template:
+                    spec:
+                      nodeSelector:
+                        kubernetes.io/os: linux
+                        kubernetes.io/arch: amd64
+                        nvidia.com/gpu: "true"
+                      tolerations:
+                        - key: CriticalAddonsOnly
+                          operator: Exists
+                          effect: NoSchedule
+                        - key: nvidia.com/gpu
+                          operator: Exists
+                          effect: NoSchedule
+                      containers:
+                        - name: ray-worker
+                          image: {{inputs.parameters.image}}
+                          imagePullPolicy: Always
+                          env:
+                            - name: MALLOC_CONF
+                              value: "background_thread:false"
+                            - name: OMP_NUM_THREADS
+                              value: "1"
+                          envFrom:
+                            - secretRef: { name: aws-creds }
+                          resources:
+                            limits:
+                              cpu: "{{workflow.parameters.cpu-limit-worker}}"
+                              memory: "{{workflow.parameters.memory-limit-worker}}"
+                              nvidia.com/gpu: "{{workflow.parameters.gpu-limit-worker}}"
+                            requests:
+                              cpu: "{{workflow.parameters.cpu-request-worker}}"
+                              memory: "{{workflow.parameters.memory-request-worker}}"
+                              nvidia.com/gpu: "{{workflow.parameters.gpu-request-worker}}"
+                    volumes:
+                      - name: dshm
+                        emptyDir:
+                          medium: Memory
+                    affinity: {}
