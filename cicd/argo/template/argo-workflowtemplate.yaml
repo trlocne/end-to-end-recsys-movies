@@ -159,6 +159,8 @@ spec:
       # gnn-model-name / reranker-model-name / s3-base-path mirror registry-name-gnn,
       # registry-name-rerank, s3-raw-path so that serving-update-dag templateRef can
       # resolve {{workflow.parameters.*}} from the calling workflow's spec.arguments.
+      - name: correlation-id
+        value: ""
       - name: gnn-model-name
         value: "Recsys-GNN"
       - name: reranker-model-name
