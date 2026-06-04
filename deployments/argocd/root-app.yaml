@@ -7,7 +7,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/trlocne/end-to-end-recommendation-system.git
+    repoURL: https://github.com/trlocne/end-to-end-recsys-movies.git
     targetRevision: main
     path: deployments/argocd/applications
   destination:
