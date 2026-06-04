@@ -1,0 +1,27 @@
+triton:
+  mode: cpu
+
+  revisionHistoryLimit: 2
+
+  servingConfigS3: "s3://recsys-moivelens/processed/production/serving_config.yaml"
+  rerankerModelName: "Recsys-ReRank"
+
+  cpu:
+    image: "nvcr.io/nvidia/tritonserver:24.08-py3"
+    resources:
+      requests:
+        cpu: "500m"
+        memory: 2Gi
+      limits:
+        cpu: "4"
+        memory: 8Gi
+
+  gpu:
+    image: "nvcr.io/nvidia/tritonserver:24.01-py3"
+    resources:
+      requests:
+        cpu: "500m"
+        memory: 2Gi
+        nvidia.com/gpu: "1"
+      limits:
+        nvidia.com/gpu: "1"

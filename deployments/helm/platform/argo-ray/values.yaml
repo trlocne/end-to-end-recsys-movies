@@ -1,0 +1,61 @@
+argo-workflows:
+  enabled: true
+  crds:
+    install: true
+    upgradeJob:
+      nodeSelector:
+        kubernetes.io/os: linux
+      tolerations:
+        - key: CriticalAddonsOnly
+          operator: Exists
+          effect: NoSchedule
+  controller:
+    nodeSelector:
+      kubernetes.io/os: linux
+    tolerations:
+      - key: CriticalAddonsOnly
+        operator: Exists
+        effect: NoSchedule
+    affinity: {}
+    workflowDefaults:
+      spec:
+        nodeSelector:
+          kubernetes.io/os: linux
+        tolerations:
+          - key: CriticalAddonsOnly
+            operator: Exists
+            effect: NoSchedule
+  server:
+    extraArgs:
+      - --auth-mode=server # For development, use properly in prod
+    nodeSelector:
+      kubernetes.io/os: linux
+    tolerations:
+      - key: CriticalAddonsOnly
+        operator: Exists
+        effect: NoSchedule
+    affinity: {}
+
+kuberay-operator:
+  enabled: true
+  nodeSelector:
+    kubernetes.io/os: linux
+  affinity: {}
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Exists
+      effect: NoSchedule
+  reconcileConcurrency: 20
+  kubeClient:
+    qps: 100
+    burst: 200
+
+rayPlugin:
+  enabled: true
+  image: trlocne204/argo-ray-executor:latest
+
+aws:
+  secretName: aws-creds
+  region: ap-southeast-1
+  accessKey: ""
+  secretKey: ""

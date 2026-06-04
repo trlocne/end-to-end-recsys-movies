@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: serving
+  namespace: serving
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: serving
+  template:
+    metadata:
+      labels:
+        app: serving
+    spec:
+      containers:
+      - name: serving
+        image: trlocne204/serving:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+        env:
+        # serving_config.yaml on S3 (serving-update step8); pod loads at startup.
+        - name: SERVING_CONFIG_S3
+          value: "s3://recsys-moivelens/processed/production/serving_config.yaml"
+        # Fallback when serving_config embeddings are null before first full workflow run.
+        - name: USER_EMB_S3
+          value: "s3://recsys-moivelens/processed/production/serving-update-6n9v4/embeddings/user_embeddings.parquet"
+        - name: ITEM_EMB_S3
+          value: "s3://recsys-moivelens/processed/production/serving-update-6n9v4/embeddings/movie_embeddings.parquet"
+        # Rerank via Triton gRPC (TRITON_URI → InferenceServerClient, port 8001).
+        - name: FEATURE_SOURCE
+          value: "triton"
+        - name: TRITON_URI
+          value: "triton-server.serving.svc.cluster.local:8001"
+        envFrom:
+        - secretRef:
+            name: aws-creds
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: serving
+  namespace: serving
+  annotations:
+    # DOKS REGIONAL_NETWORK NLB opens node :10256 for kube-proxy checks (not your app).
+    # Override probes the Service port + /health (see DO "Health Checks" + override-health-check).
+    # https://docs.digitalocean.com/products/kubernetes/how-to/configure-load-balancers/
+    service.beta.kubernetes.io/do-loadbalancer-type: "REGIONAL_NETWORK"
+    service.beta.kubernetes.io/do-loadbalancer-override-health-check: "true"
+    service.beta.kubernetes.io/do-loadbalancer-healthcheck-port: "8000"
+    service.beta.kubernetes.io/do-loadbalancer-healthcheck-protocol: "http"
+    service.beta.kubernetes.io/do-loadbalancer-healthcheck-path: "/health"
+    service.beta.kubernetes.io/do-loadbalancer-healthcheck-check-interval-seconds: "3"
+    service.beta.kubernetes.io/do-loadbalancer-healthcheck-response-timeout-seconds: "5"
+    service.beta.kubernetes.io/do-loadbalancer-healthcheck-unhealthy-threshold: "3"
+    service.beta.kubernetes.io/do-loadbalancer-healthcheck-healthy-threshold: "5"
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Cluster
+  selector:
+    app: serving
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+    nodePort: 31880
+    protocol: TCP

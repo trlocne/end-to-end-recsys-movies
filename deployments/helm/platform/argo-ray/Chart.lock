@@ -1,0 +1,9 @@
+dependencies:
+- name: argo-workflows
+  repository: https://argoproj.github.io/argo-helm
+  version: 1.0.8
+- name: kuberay-operator
+  repository: https://ray-project.github.io/kuberay-helm/
+  version: 1.6.0
+digest: sha256:71b9de32f615c6648523bd9abfaccaa532620d33361222a520ae8dabf772a9c3
+generated: "2026-04-14T10:42:16.928274873Z"

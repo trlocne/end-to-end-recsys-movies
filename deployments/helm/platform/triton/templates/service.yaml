@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: triton-server
+  namespace: serving
+  labels:
+    component: inference
+spec:
+  {{- if eq .Values.triton.mode "cpu" }}
+  selector:
+    app: triton-server-cpu
+  {{- else if eq .Values.triton.mode "gpu" }}
+  selector:
+    app: triton-server
+  {{- else }}
+  # mode: both — load-balance across CPU and GPU pods
+  selector:
+    component: inference
+  {{- end }}
+  ports:
+    - name: http
+      port: 8002
+      targetPort: http
+    - name: grpc
+      port: 8001
+      targetPort: grpc

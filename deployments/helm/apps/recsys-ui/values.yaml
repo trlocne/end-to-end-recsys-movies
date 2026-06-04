@@ -1,0 +1,26 @@
+replicaCount: 1
+
+image:
+  repository: trlocne204/recsys-ui
+  tag: latest
+  pullPolicy: Always
+
+service:
+  type: LoadBalancer
+  port: 80
+  targetPort: 3000
+
+env:
+  recsysApiBaseUrl: "http://serving:8000"
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "256Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

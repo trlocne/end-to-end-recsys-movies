@@ -1,0 +1,65 @@
+namespace: mlflow
+createNamespace: true
+
+aws:
+  secretName: aws-creds
+  region: ap-southeast-1
+  accessKey: ""   # set via: kubectl create secret generic aws-creds ... -n mlflow
+  secretKey: ""   # KHÔNG commit credentials vào đây
+  s3:
+    bucket: "recsys-moivelens"
+
+minio:
+  enabled: false
+
+postgres:
+  enabled: true
+  image: postgres:13
+  user: postgres
+  password: ""   # set via K8s Secret: kubectl create secret generic postgres-creds --from-literal=password=<pass> -n mlflow
+  database: mlflow
+  nodeSelector: {}
+  tolerations: []
+  service:
+    port: 5432
+
+mlflow:
+  image: trlocne204/mlflow:latest
+  imagePullPolicy: Always
+  serviceAccountName: ""
+  workers: 1
+  allowedHosts:
+    - "*"
+  corsAllowedOrigins:
+    - "*"
+  nodeSelector: {}
+  tolerations: []
+  backendStoreUri: "postgresql+psycopg2://postgres:$(POSTGRES_PASSWORD)@postgres-service:5432/mlflow"   # password từ env var POSTGRES_PASSWORD (secretKeyRef)
+  artifactRoot: "s3://recsys-moivelens/processed/mlflow-artifacts"
+  s3_endpoint: ""
+  service:
+    type: ClusterIP
+    port: 5000
+  resources:
+    limits:
+      cpu: "1"
+      memory: "2Gi"
+    requests:
+      cpu: "200m"
+      memory: "512Mi"
+
+storageClass:
+  create: false
+  name: do-block-storage
+  provisioner: dobs.csi.digitalocean.com
+  reclaimPolicy: Retain   # Retain: tránh mất data khi helm uninstall
+  allowVolumeExpansion: true
+  volumeBindingMode: WaitForFirstConsumer
+  parameters:
+    csi.storage.k8s.io/fstype: ext4
+
+persistence:
+  enabled: true
+  storageClassName: do-block-storage
+  mlflowSize: 20Gi
+  postgresSize: 20Gi

@@ -1,0 +1,21 @@
+﻿{{- if and .Values.aws.secretName .Values.aws.accessKey .Values.aws.secretKey -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.aws.secretName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    meta.helm.sh/release-name: {{ .Release.Name }}
+    meta.helm.sh/release-namespace: {{ .Release.Namespace }}
+type: Opaque
+stringData:
+  AWS_ACCESS_KEY_ID: {{ .Values.aws.accessKey | quote }}
+  AWS_SECRET_ACCESS_KEY: {{ .Values.aws.secretKey | quote }}
+  AWS_DEFAULT_REGION: {{ .Values.aws.region | quote }}
+  AWS_REGION: {{ .Values.aws.region | quote }}
+  # Also for convenience if needed by other components
+  access-key: {{ .Values.aws.accessKey | quote }}
+  secret-key: {{ .Values.aws.secretKey | quote }}
+{{- end }}

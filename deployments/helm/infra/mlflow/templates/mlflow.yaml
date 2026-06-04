@@ -1,0 +1,105 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlflow
+  namespace: {{ .Values.namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mlflow
+  template:
+    metadata:
+      labels:
+        app: mlflow
+    spec:
+      {{- if .Values.mlflow.serviceAccountName }}
+      serviceAccountName: {{ .Values.mlflow.serviceAccountName }}
+      {{- end }}
+      {{- with .Values.mlflow.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.mlflow.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: mlflow
+          image: {{ .Values.mlflow.image }}
+          imagePullPolicy: {{ .Values.mlflow.imagePullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - >-
+              exec mlflow server
+              --host=0.0.0.0
+              --port={{ .Values.mlflow.service.port }}
+              --workers={{ .Values.mlflow.workers }}
+              {{- if .Values.mlflow.allowedHosts }}
+              --allowed-hosts={{ join "," .Values.mlflow.allowedHosts }}
+              {{- end }}
+              {{- if .Values.mlflow.corsAllowedOrigins }}
+              --cors-allowed-origins={{ join "," .Values.mlflow.corsAllowedOrigins }}
+              {{- end }}
+              --backend-store-uri={{ .Values.mlflow.backendStoreUri }}
+              --default-artifact-root={{ .Values.mlflow.artifactRoot }}
+          ports:
+            - containerPort: {{ .Values.mlflow.service.port }}
+          env:
+            - name: AWS_DEFAULT_REGION
+              value: {{ .Values.aws.region | quote }}
+            - name: AWS_REGION
+              value: {{ .Values.aws.region | quote }}
+            {{- if .Values.mlflow.s3_endpoint }}
+            - name: MLFLOW_S3_ENDPOINT_URL
+              value: {{ .Values.mlflow.s3_endpoint | quote }}
+            {{- end }}
+          {{- if .Values.aws.secretName }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.aws.secretName }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.mlflow.resources | nindent 12 }}
+          volumeMounts:
+            - name: mlflow-data
+              mountPath: /mlflow
+      volumes:
+        - name: mlflow-data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: mlflow-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mlflow
+  namespace: {{ .Values.namespace }}
+spec:
+  type: {{ .Values.mlflow.service.type }}
+  selector:
+    app: mlflow
+  ports:
+    - name: http
+      port: {{ .Values.mlflow.service.port }}
+      targetPort: {{ .Values.mlflow.service.port }}
+---
+{{- if .Values.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mlflow-data
+  namespace: {{ .Values.namespace }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.persistence.mlflowSize }}
+  {{- if .Values.persistence.storageClassName }}
+  storageClassName: {{ .Values.persistence.storageClassName }}
+  {{- end }}
+{{- end }}

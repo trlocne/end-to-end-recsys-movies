@@ -1,0 +1,19 @@
+argo-workflows:
+  crds:
+    upgradeJob:
+      nodeSelector:
+        karpenter.sh/nodepool: system
+  controller:
+    nodeSelector:
+      karpenter.sh/nodepool: system
+    workflowDefaults:
+      spec:
+        nodeSelector:
+          karpenter.sh/nodepool: system
+  server:
+    nodeSelector:
+      karpenter.sh/nodepool: system
+
+kuberay-operator:
+  nodeSelector:
+    karpenter.sh/nodepool: ondemand-system
