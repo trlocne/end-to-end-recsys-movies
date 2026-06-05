@@ -1,0 +1,7 @@
+pyyaml
+torch
+numpy
+pandas
+feast[redis]
+psycopg2-binary
+boto3

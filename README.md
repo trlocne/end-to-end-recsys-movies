@@ -125,7 +125,7 @@ A production-ready movie recommendation system built on MovieLens, covering the 
 | Text Search | Elasticsearch (BM25) |
 | CDC | Debezium → Kafka (Strimzi KRaft) → Flink (PyFlink) |
 | Serving API | FastAPI |
-| Monitoring | Prometheus + Grafana + Loki + Alertmanager |
+| Monitoring | Prometheus + Grafana + Loki + Tempo + Alertmanager (LGTM stack) |
 | Cloud | DigitalOcean Kubernetes, AWS S3 |
 | External Services | Aiven PostgreSQL (CDC source), Aiven Redis (online store) |
 
@@ -491,9 +491,7 @@ kubectl apply -f deployments/k8s/account/monitoring-creds-secret.yaml -n argo
 ### 13.1 Manual Trigger
 
 ```bash
-argo submit -n argo --from workflowtemplate/serving-update \
-  -p registry=trlocne204 \
-  --watch
+argo submit --from cronworkflow/serving-update-cron -n argo --watch
 ```
 
 ### 13.2 Update Flow
@@ -593,6 +591,7 @@ seanmovies/
 | `debezium-connector-secret` | `infra` | Aiven PostgreSQL credentials |
 | `monitoring-creds` | `argo` | Grafana API key, Slack webhook URL |
 | `postgres-creds` | `argo`, `mlflow` | PostgreSQL password (`DB_PASSWORD`) |
+| `slack-webhook` | `monitoring` | Slack incoming webhook URL (`url`) |
 
 All `*-secret.yaml` files in the repository contain placeholders only. Never commit real credentials.
 
