@@ -450,8 +450,21 @@ spec:
                 - name: args
                   value: ""
 
-          - name: run-serving-update-embedded
+          - name: run-onnx-export
             depends: "run-promote-models"
+            when: "{{workflow.parameters.run-serving-update}} == true"
+            template: run-shell-step-template
+            arguments:
+              parameters:
+                - name: image
+                  value: "{{workflow.parameters.registry}}/train-jobs:latest"
+                - name: command
+                  value: "python deployments/helm/infra/jenkins/onnx_export.py"
+                - name: args
+                  value: ""
+
+          - name: run-serving-update-embedded
+            depends: "run-onnx-export"
             when: "{{workflow.parameters.run-serving-update}} == true"
             templateRef:
               name: serving-update
@@ -659,6 +672,8 @@ spec:
             value: "champion"
           - name: PRODUCTION_ALIAS
             value: "production"
+          - name: S3_BASE_PREFIX
+            value: "{{workflow.parameters.s3-base-path}}"
           - name: CORRELATION_ID
             value: "{{workflow.uid}}"
           - name: METRIC_KEY

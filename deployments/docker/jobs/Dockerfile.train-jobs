@@ -14,5 +14,6 @@ COPY workflows/steps/train_gnn/main.py /app/train_gnn.py
 COPY workflows/steps/train_reranker/main.py /app/train_reranker.py
 COPY configs/ /app/configs/
 COPY scripts/ /app/scripts/
+COPY deployments/helm/infra/jenkins/onnx_export.py /app/deployments/helm/infra/jenkins/onnx_export.py
 
 ENV PYTHONPATH=/app

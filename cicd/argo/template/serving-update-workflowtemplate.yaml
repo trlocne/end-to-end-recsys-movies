@@ -1,0 +1,1065 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: serving-update
+  namespace: argo
+spec:
+  entrypoint: serving-update-dag
+  serviceAccountName: argo-workflow-sa
+  podGC:
+    strategy: OnWorkflowCompletion
+    deleteDelayDuration: "3600s"
+  ttlStrategy:
+    secondsAfterSuccess: 604800
+    secondsAfterFailure: 1209600
+  arguments:
+    parameters:
+    - name: registry
+      value: "trlocne204"
+    - name: mlflow-tracking-uri
+      value: "http://mlflow.mlflow.svc.cluster.local:5000"
+    - name: gnn-model-name
+      value: "Recsys-GNN"
+    - name: gnn-model-alias
+      value: "production"
+    - name: reranker-model-name
+      value: "Recsys-ReRank"
+    - name: milvus-uri
+      value: "http://milvus.infra.svc.cluster.local:19530"
+    - name: milvus-token
+      value: ""
+    - name: es-uri
+      value: "http://elasticsearch.infra.svc.cluster.local:9200"
+    - name: es-api-key
+      value: ""
+    - name: s3-base-path
+      value: "s3://recsys-moivelens/processed/production"
+    - name: feature-file
+      value: ""
+    - name: data-path-data-prep
+      value: ""
+    - name: collection-retention-days
+      value: "7"
+    - name: milvus-max-collections
+      value: "5"
+    - name: incremental-users-only
+      value: "true"
+    - name: onnx-path
+      value: ""
+    - name: use-gpu-triton
+      value: "false"
+    - name: gnn-model-version-override
+      value: ""
+    - name: reranker-model-version-override
+      value: ""
+    - name: serving-config-path
+      value: "s3://recsys-moivelens/processed/production/serving_config.yaml"
+    - name: correlation-id
+      value: "default"
+    - name: serving-namespace
+      value: "serving"
+    - name: serving-deployment
+      value: "serving"
+    - name: incremental-config-path
+      value: "s3://recsys-moivelens/processed/production/incremental_config.yaml"
+
+  templates:
+  - name: serving-update-dag
+    dag:
+      tasks:
+      - name: step0b-feast-materialization
+        template: feast-materialization
+        arguments:
+          parameters:
+          - name: config-path
+            value: "{{workflow.parameters.incremental-config-path}}"
+          - name: registry
+            value: "{{workflow.parameters.registry}}"
+          - name: incremental-config-path
+            value: "{{workflow.parameters.incremental-config-path}}"
+
+      - name: step1-fetch-model-info
+        template: fetch-model-info
+        dependencies: [step0b-feast-materialization]
+        arguments:
+          parameters:
+          - name: mlflow-tracking-uri
+            value: "{{workflow.parameters.mlflow-tracking-uri}}"
+          - name: gnn-model-name
+            value: "{{workflow.parameters.gnn-model-name}}"
+          - name: gnn-model-alias
+            value: "{{workflow.parameters.gnn-model-alias}}"
+          - name: gnn-model-version-override
+            value: "{{workflow.parameters.gnn-model-version-override}}"
+          - name: reranker-model-name
+            value: "{{workflow.parameters.reranker-model-name}}"
+          - name: reranker-model-version-override
+            value: "{{workflow.parameters.reranker-model-version-override}}"
+          - name: s3-base-path
+            value: "{{workflow.parameters.s3-base-path}}"
+          - name: correlation-id
+            value: "{{workflow.parameters.correlation-id}}"
+
+      - name: step2-inference
+        template: gnn-inference
+        dependencies: [step1-fetch-model-info]
+        arguments:
+          parameters:
+          - name: model-path
+            value: "{{tasks.step1-fetch-model-info.outputs.parameters.model-s3-path}}"
+          - name: s3-base-path
+            value: "{{workflow.parameters.s3-base-path}}"
+          - name: workflow-name
+            value: "{{workflow.name}}"
+          - name: incremental-users-only
+            value: "{{workflow.parameters.incremental-users-only}}"
+          - name: feature-file
+            value: "{{tasks.step1-fetch-model-info.outputs.parameters.FEATURE_FILE}}"
+          - name: data-path-data-prep
+            value: "{{tasks.step1-fetch-model-info.outputs.parameters.DATA_PREP_PATH}}"
+          - name: mlflow-tracking-uri
+            value: "{{workflow.parameters.mlflow-tracking-uri}}"
+          - name: embed-dim
+            value: "{{tasks.step1-fetch-model-info.outputs.parameters.EMBED_DIM}}"
+          - name: num-layers
+            value: "{{tasks.step1-fetch-model-info.outputs.parameters.NUM_LAYERS}}"
+          - name: registry
+            value: "{{workflow.parameters.registry}}"
+
+      - name: step2c-precleanup-collections
+        template: cleanup-collections-before-create
+        dependencies: [step2-inference]
+        arguments:
+          parameters:
+          - name: milvus-uri
+            value: "{{workflow.parameters.milvus-uri}}"
+          - name: milvus-token
+            value: "{{workflow.parameters.milvus-token}}"
+          - name: max-collections
+            value: "{{workflow.parameters.milvus-max-collections}}"
+          - name: registry
+            value: "{{workflow.parameters.registry}}"
+
+      - name: step3-create-new-collections
+        template: create-milvus-collections
+        dependencies: [step2c-precleanup-collections]
+        arguments:
+          parameters:
+          - name: milvus-uri
+            value: "{{workflow.parameters.milvus-uri}}"
+          - name: milvus-token
+            value: "{{workflow.parameters.milvus-token}}"
+          - name: embeddings-path
+            value: "{{tasks.step2-inference.outputs.parameters.embeddings-path}}"
+          - name: timestamp
+            value: "{{workflow.parameters.s3-base-path}}/{{workflow.name}}"
+          - name: registry
+            value: "{{workflow.parameters.registry}}"
+
+      - name: step4-index-embeddings
+        template: index-embeddings
+        dependencies: [step3-create-new-collections]
+        arguments:
+          parameters:
+          - name: milvus-uri
+            value: "{{workflow.parameters.milvus-uri}}"
+          - name: milvus-token
+            value: "{{workflow.parameters.milvus-token}}"
+          - name: embeddings-path
+            value: "{{tasks.step2-inference.outputs.parameters.embeddings-path}}"
+          - name: movie-collection
+            value: "{{tasks.step3-create-new-collections.outputs.parameters.movie-collection}}"
+          - name: data-prep-path
+            value: "{{tasks.step1-fetch-model-info.outputs.parameters.DATA_PREP_PATH}}"
+          - name: es-uri
+            value: "{{workflow.parameters.es-uri}}"
+          - name: es-api-key
+            value: "{{workflow.parameters.es-api-key}}"
+          - name: registry
+            value: "{{workflow.parameters.registry}}"
+
+      - name: step6-switch-collections
+        template: switch-collections
+        dependencies: [step4-index-embeddings]
+        arguments:
+          parameters:
+          - name: milvus-uri
+            value: "{{workflow.parameters.milvus-uri}}"
+          - name: milvus-token
+            value: "{{workflow.parameters.milvus-token}}"
+          - name: movie-collection
+            value: "{{tasks.step3-create-new-collections.outputs.parameters.movie-collection}}"
+          - name: user-collection
+            value: "{{tasks.step3-create-new-collections.outputs.parameters.user-collection}}"
+          - name: registry
+            value: "{{workflow.parameters.registry}}"
+
+      - name: step7-health-check
+        template: health-check
+        dependencies: [step6-switch-collections]
+        arguments:
+          parameters:
+          - name: milvus-uri
+            value: "{{workflow.parameters.milvus-uri}}"
+          - name: milvus-token
+            value: "{{workflow.parameters.milvus-token}}"
+          - name: movie-collection
+            value: "{{tasks.step3-create-new-collections.outputs.parameters.movie-collection}}"
+          - name: user-collection
+            value: "{{tasks.step3-create-new-collections.outputs.parameters.user-collection}}"
+          - name: registry
+            value: "{{workflow.parameters.registry}}"
+
+      - name: step8-update-serving-config
+        template: update-serving-config
+        dependencies: [step7-health-check]
+        arguments:
+          parameters:
+          - name: serving-config-path
+            value: "{{workflow.parameters.serving-config-path}}"
+          - name: bundle-version
+            value: "{{tasks.step1-fetch-model-info.outputs.parameters.MODEL_VERSION}}"
+          - name: gnn-run-id
+            value: "{{tasks.step1-fetch-model-info.outputs.parameters.MODEL_RUN_ID}}"
+          - name: reranker-run-id
+            value: "{{tasks.step1-fetch-model-info.outputs.parameters.RERANKER_RUN_ID}}"
+          - name: reranker-version
+            value: "{{tasks.step1-fetch-model-info.outputs.parameters.RERANKER_VERSION}}"
+          - name: reranker-input-dim
+            value: "{{tasks.step1-fetch-model-info.outputs.parameters.RERANKER_INPUT_DIM}}"
+          - name: gnn-embed-dim
+            value: "{{tasks.step1-fetch-model-info.outputs.parameters.EMBED_DIM}}"
+          - name: gnn-num-layers
+            value: "{{tasks.step1-fetch-model-info.outputs.parameters.NUM_LAYERS}}"
+          - name: embeddings-path
+            value: "{{tasks.step2-inference.outputs.parameters.embeddings-path}}"
+          - name: movie-collection
+            value: "{{tasks.step3-create-new-collections.outputs.parameters.movie-collection}}"
+          - name: feature-file
+            value: "{{tasks.step1-fetch-model-info.outputs.parameters.FEATURE_FILE}}"
+          - name: data-prep-path
+            value: "{{tasks.step1-fetch-model-info.outputs.parameters.DATA_PREP_PATH}}"
+          - name: s3-base-path
+            value: "{{workflow.parameters.s3-base-path}}"
+          - name: registry
+            value: "{{workflow.parameters.registry}}"
+
+      - name: step10-rollout-serving
+        template: rollout-serving-triton-deploy
+        dependencies: [step8-update-serving-config]
+        arguments:
+          parameters:
+          - name: serving-namespace
+            value: "{{workflow.parameters.serving-namespace}}"
+          - name: serving-deployment
+            value: "{{workflow.parameters.serving-deployment}}"
+          - name: onnx-path
+            value: "{{tasks.step1-fetch-model-info.outputs.parameters.ONNX_PATH}}"
+          - name: gnn-embed-dim
+            value: "{{tasks.step1-fetch-model-info.outputs.parameters.EMBED_DIM}}"
+          - name: use-gpu-triton
+            value: "{{workflow.parameters.use-gpu-triton}}"
+          - name: registry
+            value: "{{workflow.parameters.registry}}"
+
+      - name: step9-cleanup-old-collections
+        template: cleanup-collections
+        dependencies: [step7-health-check]
+        arguments:
+          parameters:
+          - name: milvus-uri
+            value: "{{workflow.parameters.milvus-uri}}"
+          - name: milvus-token
+            value: "{{workflow.parameters.milvus-token}}"
+          - name: retention-days
+            value: "{{workflow.parameters.collection-retention-days}}"
+          - name: registry
+            value: "{{workflow.parameters.registry}}"
+
+  # Feast online store (same as serving-update-cron); run before fetch/inference so
+  # materialize-incremental completes before GNN batch inference and Milvus/ES rollout.
+  - name: feast-materialization
+    inputs:
+      parameters:
+      - name: config-path
+      - name: registry
+        value: "trlocne204"
+      - name: incremental-config-path
+        value: ""
+    script:
+      image: "{{inputs.parameters.registry}}/incremental-feature-extractor:latest"
+      command: ["sh", "-c"]
+      source: |
+        END_TS=$(date -u +"%Y-%m-%dT%H:%M:%S")
+        echo "Running feast materialize-incremental up to ${END_TS}"
+        cd /app/src/feature_repo && feast materialize-incremental ${END_TS}
+      env:
+        - name: FEAST_REPO_PATH
+          value: "/app/src/feature_repo"
+      envFrom:
+        - secretRef: { name: aws-creds }
+
+  - name: fetch-model-info
+    inputs:
+      parameters:
+      - name: mlflow-tracking-uri
+      - name: gnn-model-name
+      - name: gnn-model-alias
+      - name: gnn-model-version-override
+      - name: reranker-model-name
+      - name: reranker-model-version-override
+      - name: s3-base-path
+      - name: correlation-id
+        value: ""
+    script:
+      image: ghcr.io/mlflow/mlflow:v3.11.1
+      command: ["python"]
+      source: |
+        import os
+        from mlflow import MlflowClient
+
+        _corr = "{{inputs.parameters.correlation-id}}"
+        if _corr:
+            print(f"[CORRELATION] {_corr}")
+
+        tracking_uri = "{{inputs.parameters.mlflow-tracking-uri}}"
+        model_name = "{{inputs.parameters.gnn-model-name}}"
+        alias = "{{inputs.parameters.gnn-model-alias}}"
+        version_override = "{{inputs.parameters.gnn-model-version-override}}"
+        reranker_name = "{{inputs.parameters.reranker-model-name}}"
+        reranker_version_override = "{{inputs.parameters.reranker-model-version-override}}"
+        s3_base_path = "{{inputs.parameters.s3-base-path}}"
+
+        client = MlflowClient(tracking_uri=tracking_uri)
+
+        # ===== Fetch GNN Model Info =====
+        if version_override and version_override.strip():
+            model_version = client.get_model_version(model_name, version_override)
+            # Use versioned URI so inference_only.py can download via MLflow client
+            model_uri = f"models:/{model_name}/{model_version.version}"
+        else:
+            model_version = client.get_model_version_by_alias(model_name, alias)
+            model_uri = f"models:/{model_name}@{alias}"
+
+        print(f"MODEL_URI={model_uri}")
+        print(f"MODEL_VERSION={model_version.version}")
+        print(f"MODEL_RUN_ID={model_version.run_id}")
+
+        # Fetch full run to extract explicit artifact path tags logged by training.
+        # These tags are set by _setup_mlflow in trainer_ray.py using keys:
+        #   feature_file     — full S3 path to features.pt
+        #   data_prep_path   — full S3 dir with train_df, users_map, etc.
+        # Params are also checked as fallback for older runs.
+        run = client.get_run(model_version.run_id)
+        tags = run.data.tags
+        params = run.data.params
+
+        feature_file = tags.get("feature_file") or params.get("feature_file", "")
+        data_prep_path = (tags.get("data_prep_path")
+                          or params.get("data_path_data_prep", ""))
+
+        if not feature_file:
+            raise ValueError(
+                f"feature_file tag/param missing on MLflow run {model_version.run_id}. "
+                "Ensure train_gnn logs feature_file in final_params."
+            )
+        if not data_prep_path:
+            raise ValueError(
+                f"data_prep_path tag/param missing on MLflow run {model_version.run_id}. "
+                "Ensure train_gnn logs data_path_data_prep in final_params."
+            )
+
+        print(f"FEATURE_FILE={feature_file}")
+        print(f"DATA_PREP_PATH={data_prep_path}")
+
+        # Get architecture parameters from MLflow params
+        embed_dim = params.get("embed_dim", "128")
+        num_layers = params.get("num_layers", "3")
+        print(f"EMBED_DIM={embed_dim}")
+        print(f"NUM_LAYERS={num_layers}")
+
+        # ===== Fetch Reranker Model Info =====
+        if reranker_version_override and reranker_version_override.strip():
+            reranker_version = client.get_model_version(reranker_name, reranker_version_override)
+        else:
+            reranker_version = client.get_model_version_by_alias(reranker_name, alias)
+
+        print(f"RERANKER_VERSION={reranker_version.version}")
+        print(f"RERANKER_RUN_ID={reranker_version.run_id}")
+
+        reranker_run = client.get_run(reranker_version.run_id)
+        reranker_params = reranker_run.data.params
+        reranker_embed_dim = reranker_params.get("embed_dim", "")
+        reranker_input_dim = reranker_params.get("input_dim", "")
+
+        print(f"RERANKER_EMBED_DIM={reranker_embed_dim}")
+        print(f"RERANKER_INPUT_DIM={reranker_input_dim}")
+
+        # Check embed_dim compatibility: Reranker embed_dim (output of GNN encoder it was trained with)
+        # must match GNN embed_dim. Do NOT compare against reranker input_dim which is larger
+        # (input_dim = embed_dim * 2 + extra features concatenated by the reranker).
+        if reranker_embed_dim:
+            if str(embed_dim) != str(reranker_embed_dim):
+                raise ValueError(
+                    f"Inference contract: GNN embed_dim={embed_dim} != reranker embed_dim={reranker_embed_dim}"
+                )
+        else:
+            print("[WARN] reranker embed_dim missing; skipping GNN/rerank embed_dim contract check.")
+
+        # ===== Derive ONNX S3 path (must match deployments/helm/infra/jenkins/onnx_export.py) =====
+        # {s3-base-path}/{MODEL_NAME}/v{version}/reranker.onnx
+        onnx_path = (
+            f"{s3_base_path.rstrip('/')}/"
+            f"{reranker_name}/"
+            f"v{reranker_version.version}/"
+            f"reranker.onnx"
+        )
+        print(f"ONNX_PATH={onnx_path}")
+
+        os.makedirs("/tmp/outputs", exist_ok=True)
+        # Pass MLflow URI directly — inference_only.py will download using MLflow client
+        with open("/tmp/outputs/model-s3-path", "w") as f:
+            f.write(model_uri)
+        with open("/tmp/outputs/MODEL_VERSION", "w") as f:
+            f.write(model_version.version)
+        with open("/tmp/outputs/MODEL_VERSION_ID", "w") as f:
+            f.write(model_version.version)
+        with open("/tmp/outputs/MODEL_RUN_ID", "w") as f:
+            f.write(model_version.run_id)
+        with open("/tmp/outputs/FEATURE_FILE", "w") as f:
+            f.write(feature_file)
+        with open("/tmp/outputs/DATA_PREP_PATH", "w") as f:
+            f.write(data_prep_path)
+        with open("/tmp/outputs/EMBED_DIM", "w") as f:
+            f.write(str(embed_dim))
+        with open("/tmp/outputs/NUM_LAYERS", "w") as f:
+            f.write(str(num_layers))
+        with open("/tmp/outputs/RERANKER_VERSION", "w") as f:
+            f.write(reranker_version.version)
+        with open("/tmp/outputs/RERANKER_RUN_ID", "w") as f:
+            f.write(reranker_version.run_id)
+        with open("/tmp/outputs/RERANKER_INPUT_DIM", "w") as f:
+            f.write(str(reranker_input_dim))
+        with open("/tmp/outputs/ONNX_PATH", "w") as f:
+            f.write(onnx_path)
+
+    outputs:
+      parameters:
+      - name: model-s3-path
+        valueFrom:
+          path: /tmp/outputs/model-s3-path
+      - name: MODEL_VERSION
+        valueFrom:
+          path: /tmp/outputs/MODEL_VERSION
+      - name: MODEL_VERSION_ID
+        valueFrom:
+          path: /tmp/outputs/MODEL_VERSION_ID
+      - name: MODEL_RUN_ID
+        valueFrom:
+          path: /tmp/outputs/MODEL_RUN_ID
+      - name: FEATURE_FILE
+        valueFrom:
+          path: /tmp/outputs/FEATURE_FILE
+      - name: DATA_PREP_PATH
+        valueFrom:
+          path: /tmp/outputs/DATA_PREP_PATH
+      - name: EMBED_DIM
+        valueFrom:
+          path: /tmp/outputs/EMBED_DIM
+      - name: NUM_LAYERS
+        valueFrom:
+          path: /tmp/outputs/NUM_LAYERS
+      - name: RERANKER_VERSION
+        valueFrom:
+          path: /tmp/outputs/RERANKER_VERSION
+      - name: RERANKER_RUN_ID
+        valueFrom:
+          path: /tmp/outputs/RERANKER_RUN_ID
+      - name: RERANKER_INPUT_DIM
+        valueFrom:
+          path: /tmp/outputs/RERANKER_INPUT_DIM
+      - name: ONNX_PATH
+        valueFrom:
+          path: /tmp/outputs/ONNX_PATH
+
+  - name: gnn-inference
+    inputs:
+      parameters:
+      - name: registry
+        value: "trlocne204"
+      - name: model-path
+      - name: s3-base-path
+      - name: workflow-name
+      - name: incremental-users-only
+      - name: feature-file
+      - name: data-path-data-prep
+      - name: mlflow-tracking-uri
+      - name: embed-dim
+      - name: num-layers
+    container:
+      image: "{{inputs.parameters.registry}}/train-jobs:latest"
+      command: ["python", "/app/src/training/inference_only.py"]
+      args:
+        - "--model-path"
+        - "{{inputs.parameters.model-path}}"
+        - "--feature-file"
+        - "{{inputs.parameters.feature-file}}"
+        - "--data-path-data-prep"
+        - "{{inputs.parameters.data-path-data-prep}}"
+        - "--output-path"
+        - "{{inputs.parameters.s3-base-path}}/{{inputs.parameters.workflow-name}}/embeddings"
+        - "--embed-dim"
+        - "{{inputs.parameters.embed-dim}}"
+        - "--num-layers"
+        - "{{inputs.parameters.num-layers}}"
+      env:
+        - name: MLFLOW_TRACKING_URI
+          value: "{{inputs.parameters.mlflow-tracking-uri}}"
+      envFrom:
+        - secretRef: { name: aws-creds }
+    outputs:
+      parameters:
+      - name: embeddings-path
+        value: "{{inputs.parameters.s3-base-path}}/{{inputs.parameters.workflow-name}}/embeddings"
+
+  # Template: Create new Milvus collections (blue)
+  - name: create-milvus-collections
+    inputs:
+      parameters:
+      - name: registry
+        value: "trlocne204"
+      - name: milvus-uri
+      - name: milvus-token
+      - name: embeddings-path
+      - name: timestamp
+    script:
+      image: "{{inputs.parameters.registry}}/indexing:latest"
+      command: ["python"]
+      source: |
+        import sys
+        import os
+
+        # Sanitize: Milvus only allows letters, numbers and underscores
+        raw = "{{inputs.parameters.timestamp}}".split("/")[-1]
+        timestamp = raw.replace("-", "_")
+
+        # Generate collection names with timestamp
+        movie_collection = f"movie_embeddings_{timestamp}"
+        user_collection = f"user_embeddings_{timestamp}"
+        
+        print(f"MOVIE_COLLECTION={movie_collection}")
+        print(f"USER_COLLECTION={user_collection}")
+        
+        # Write outputs to files for Argo
+        os.makedirs("/tmp/outputs", exist_ok=True)
+        with open("/tmp/outputs/movie-collection", "w") as f:
+            f.write(movie_collection)
+        with open("/tmp/outputs/user-collection", "w") as f:
+            f.write(user_collection)
+        
+        # Note: Collection creation will be handled by indexing step
+        # This step just generates the names
+
+    outputs:
+      parameters:
+      - name: movie-collection
+        valueFrom:
+          path: /tmp/outputs/movie-collection
+      - name: user-collection
+        valueFrom:
+          path: /tmp/outputs/user-collection
+
+  - name: cleanup-collections-before-create
+    inputs:
+      parameters:
+      - name: registry
+        value: "trlocne204"
+      - name: milvus-uri
+      - name: milvus-token
+      - name: max-collections
+    script:
+      image: "{{inputs.parameters.registry}}/indexing:latest"
+      command: ["python"]
+      source: |
+        import sys
+        import time
+        import traceback
+        from pymilvus import connections, Collection, utility
+
+        milvus_uri = "{{inputs.parameters.milvus-uri}}"
+        milvus_token = "{{inputs.parameters.milvus-token}}"
+        max_collections = int("{{inputs.parameters.max-collections}}")
+
+        # One new movie collection is created in index-embeddings; keep a free slot.
+        target_limit = max(1, max_collections - 1)
+
+        def drop_collection_safe(name: str) -> None:
+            if not utility.has_collection(name):
+                print(f"[INFO] skip drop (already gone): {name}")
+                return
+            col = Collection(name)
+            try:
+                col.release()
+            except Exception as e:
+                print(f"[INFO] release {name} (non-fatal): {e}")
+            try:
+                col.drop()
+            except Exception:
+                utility.drop_collection(name)
+            time.sleep(0.5)
+
+        try:
+            connections.connect("default", uri=milvus_uri, token=milvus_token)
+            all_collections = sorted(utility.list_collections())
+            print(f"[INFO] Milvus collections total={len(all_collections)} max={max_collections}")
+
+            protected = {"movie_embeddings", "user_embeddings"}
+            candidates = [
+                c for c in all_collections
+                if (c.startswith("movie_embeddings_") or c.startswith("user_embeddings_"))
+                and c not in protected
+            ]
+
+            for _ in range(50):
+                if len(all_collections) <= target_limit or not candidates:
+                    break
+                to_drop = candidates.pop(0)
+                print(f"[INFO] pre-cleanup drop collection: {to_drop}")
+                drop_collection_safe(to_drop)
+                all_collections = sorted(utility.list_collections())
+                candidates = [
+                    c for c in all_collections
+                    if (c.startswith("movie_embeddings_") or c.startswith("user_embeddings_"))
+                    and c not in protected
+                ]
+
+            if len(all_collections) > target_limit:
+                print(
+                    f"[ERROR] still {len(all_collections)} collections (limit {target_limit}); "
+                    f"droppable prefix list exhausted. All: {all_collections}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
+            print(f"[INFO] Milvus collections after pre-cleanup: {len(all_collections)}")
+        except Exception:
+            traceback.print_exc()
+            raise
+        finally:
+            try:
+                connections.disconnect("default")
+            except Exception:
+                pass
+
+  - name: index-embeddings
+    inputs:
+      parameters:
+      - name: registry
+        value: "trlocne204"
+      - name: milvus-uri
+      - name: milvus-token
+      - name: embeddings-path
+      - name: movie-collection
+      - name: data-prep-path
+      - name: es-uri
+      - name: es-api-key
+    container:
+      image: "{{inputs.parameters.registry}}/indexing:latest"
+      args:
+        - "--embedding-path"
+        - "{{inputs.parameters.embeddings-path}}/movie_embeddings.parquet"
+        - "--metadata-path"
+        - "{{inputs.parameters.data-prep-path}}/movies_metadata.parquet"
+        - "--milvus-uri"
+        - "{{inputs.parameters.milvus-uri}}"
+        - "--milvus-token"
+        - "{{inputs.parameters.milvus-token}}"
+        - "--milvus-collection"
+        - "{{inputs.parameters.movie-collection}}"
+        - "--es-uri"
+        - "{{inputs.parameters.es-uri}}"
+        - "--es-api-key"
+        - "{{inputs.parameters.es-api-key}}"
+        - "--es-index"
+        - "recsys-movies"
+      envFrom:
+        - secretRef: { name: aws-creds }
+
+  # Template: Switch collections (blue-green)
+  # Verifies the new movie collection is ready; user_collection is accepted as param
+  # but not created by index-embeddings (only movie embeddings are indexed).
+  - name: switch-collections
+    inputs:
+      parameters:
+      - name: registry
+        value: "trlocne204"
+      - name: milvus-uri
+      - name: milvus-token
+      - name: movie-collection
+      - name: user-collection
+    script:
+      image: "{{inputs.parameters.registry}}/indexing:latest"
+      command: ["python"]
+      source: |
+        from pymilvus import connections, Collection, utility
+
+        milvus_uri = "{{inputs.parameters.milvus-uri}}"
+        milvus_token = "{{inputs.parameters.milvus-token}}"
+        movie_collection = "{{inputs.parameters.movie-collection}}"
+
+        connections.connect("default", uri=milvus_uri, token=milvus_token)
+
+        if not utility.has_collection(movie_collection):
+            raise RuntimeError(f"Collection {movie_collection} does not exist")
+
+        col = Collection(movie_collection)
+        col.load()
+        num_entities = col.num_entities
+        print(f"[INFO] Collection {movie_collection}: {num_entities} entities — ready")
+        if num_entities == 0:
+            raise RuntimeError(f"Collection {movie_collection} is empty")
+
+        print(f"[INFO] switch-collections: movie collection switched to {movie_collection}")
+
+  - name: health-check
+  - name: health-check
+    inputs:
+      parameters:
+      - name: registry
+        value: "trlocne204"
+      - name: milvus-uri
+      - name: milvus-token
+      - name: movie-collection
+      - name: user-collection
+    script:
+      image: "{{inputs.parameters.registry}}/indexing:latest"
+      command: ["python"]
+      source: |
+        import sys
+        from pymilvus import connections, Collection
+        import time
+
+        milvus_uri = "{{inputs.parameters.milvus-uri}}"
+        milvus_token = "{{inputs.parameters.milvus-token}}"
+        movie_collection = "{{inputs.parameters.movie-collection}}"
+        user_collection = "{{inputs.parameters.user-collection}}"
+        
+        connections.connect("default", uri=milvus_uri, token=milvus_token)
+        
+        # Only check movie collection (user collection not indexed by current pipeline)
+        for col_name in [movie_collection]:
+            try:
+                col = Collection(col_name)
+                col.load()
+                num_entities = col.num_entities
+                print(f"Collection {col_name}: {num_entities} entities")
+                if num_entities == 0:
+                    raise Exception(f"Collection {col_name} is empty")
+            except Exception as e:
+                print(f"Health check failed for {col_name}: {e}")
+                sys.exit(1)
+
+        print("Health check passed")
+
+  # Template: Update Serving Config (S3).
+  # Reads serving_config.yaml from S3, updates fields, writes back. Also writes an
+  # immutable deployment manifest. Pod restart is handled separately by step10
+  # (kubectl rollout restart) so the serving Deployment picks up the new config.
+  - name: update-serving-config
+    inputs:
+      parameters:
+      - name: registry
+        value: "trlocne204"
+      - name: serving-config-path
+      - name: bundle-version
+      - name: gnn-run-id
+      - name: reranker-run-id
+      - name: reranker-version
+      - name: reranker-input-dim
+      - name: gnn-embed-dim
+      - name: gnn-num-layers
+      - name: embeddings-path
+      - name: movie-collection
+      - name: feature-file
+      - name: data-prep-path
+      - name: s3-base-path
+    script:
+      image: python:3.11-slim
+      command: ["python"]
+      source: |
+        import subprocess, sys
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "boto3", "pyyaml"])
+
+        import yaml
+        import json
+        import boto3
+        from datetime import datetime, timezone
+
+        s3_config_path = "{{inputs.parameters.serving-config-path}}"
+        bundle_version = "{{inputs.parameters.bundle-version}}"
+        gnn_run_id = "{{inputs.parameters.gnn-run-id}}"
+        reranker_run_id = "{{inputs.parameters.reranker-run-id}}"
+        reranker_version = "{{inputs.parameters.reranker-version}}"
+        gnn_embed_dim = "{{inputs.parameters.gnn-embed-dim}}"
+        gnn_num_layers = "{{inputs.parameters.gnn-num-layers}}"
+        embeddings_path = "{{inputs.parameters.embeddings-path}}"
+        movie_collection = "{{inputs.parameters.movie-collection}}"
+        feature_file = "{{inputs.parameters.feature-file}}"
+        data_prep_path = "{{inputs.parameters.data-prep-path}}"
+        s3_base_path = "{{inputs.parameters.s3-base-path}}"
+
+        s3 = boto3.client("s3")
+
+        def _parse_s3(s3_url):
+            parts = s3_url.replace("s3://", "").split("/", 1)
+            return parts[0], parts[1] if len(parts) > 1 else ""
+
+        cfg_bucket, cfg_key = _parse_s3(s3_config_path)
+        try:
+            obj = s3.get_object(Bucket=cfg_bucket, Key=cfg_key)
+            config = yaml.safe_load(obj["Body"].read().decode("utf-8")) or {}
+        except s3.exceptions.NoSuchKey:
+            print("WARNING: serving_config.yaml not found in S3, starting from empty config.")
+            config = {}
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        config.setdefault("models", {})
+        config["models"]["bundle_version"] = bundle_version
+        config["models"]["gnn_run_id"] = gnn_run_id
+        config["models"]["reranker_run_id"] = reranker_run_id
+        config["models"]["reranker_version"] = reranker_version
+        config["models"]["reranker_input_dim"] = int("{{inputs.parameters.reranker-input-dim}}")
+        config["models"]["gnn_embed_dim"] = int(gnn_embed_dim)
+        config["models"]["gnn_num_layers"] = int(gnn_num_layers)
+
+        config.setdefault("embeddings", {})
+        config["embeddings"]["user_emb"] = f"{embeddings_path}/user_embeddings.parquet"
+        config["embeddings"]["item_emb"] = f"{embeddings_path}/movie_embeddings.parquet"
+        config["embeddings"]["last_refresh_time"] = now
+
+        config.setdefault("milvus", {})
+        config["milvus"]["movie_collection"] = movie_collection
+
+        config.setdefault("training_lineage", {})
+        config["training_lineage"]["feature_file"] = feature_file
+        config["training_lineage"]["data_prep_path"] = data_prep_path
+
+        s3.put_object(
+            Bucket=cfg_bucket,
+            Key=cfg_key,
+            Body=yaml.dump(config, default_flow_style=False),
+            ContentType="application/x-yaml",
+        )
+        print(f"serving_config.yaml updated at s3://{cfg_bucket}/{cfg_key}")
+        print(f"Bundle v{bundle_version} | embeddings: {embeddings_path}")
+
+        manifest = {
+            "deployment_time": now,
+            "bundle_version": bundle_version,
+            "gnn_run_id": gnn_run_id,
+            "reranker_run_id": reranker_run_id,
+            "feature_file": feature_file,
+            "data_prep_path": data_prep_path,
+            "embeddings_path": embeddings_path,
+        }
+        try:
+            base_bucket, base_prefix = _parse_s3(s3_base_path)
+            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            manifest_key = f"{base_prefix}/deployments/{ts}_manifest.json".lstrip("/")
+            s3.put_object(
+                Bucket=base_bucket,
+                Key=manifest_key,
+                Body=json.dumps(manifest, indent=2),
+                ContentType="application/json",
+            )
+            print(f"Deployment manifest written to s3://{base_bucket}/{manifest_key}")
+        except Exception as e:
+            print(f"WARNING: failed to write deployment manifest: {e}")
+      envFrom:
+        - secretRef: { name: aws-creds }
+
+  - name: rollout-serving-restart
+    inputs:
+      parameters:
+      - name: registry
+        value: "trlocne204"
+      - name: serving-namespace
+      - name: serving-deployment
+    script:
+      image: python:3.11-slim
+      command: ["bash", "-c"]
+      source: |
+        set -eu
+        apt-get update -qq && apt-get install -y -qq curl ca-certificates
+        KUBECTL_VER=$(curl -fsSL https://dl.k8s.io/release/stable.txt)
+        curl -fsSLo /usr/local/bin/kubectl \
+          "https://dl.k8s.io/release/${KUBECTL_VER}/bin/linux/amd64/kubectl"
+        chmod +x /usr/local/bin/kubectl
+        NS="{{inputs.parameters.serving-namespace}}"
+        DEPLOY="{{inputs.parameters.serving-deployment}}"
+        kubectl rollout restart "deployment/${DEPLOY}" -n "${NS}"
+        kubectl rollout status "deployment/${DEPLOY}" -n "${NS}" --timeout=300s
+
+  - name: rollout-serving-triton-deploy
+    inputs:
+      parameters:
+      - name: registry
+        value: "trlocne204"
+      - name: serving-namespace
+      - name: serving-deployment
+      - name: onnx-path
+      - name: gnn-embed-dim
+      - name: use-gpu-triton
+    script:
+      image: python:3.11-slim
+      command: ["bash", "-c"]
+      source: |
+        set -eu
+        apt-get update -qq && apt-get install -y -qq curl ca-certificates
+        pip install -q boto3
+        KUBECTL_VER=$(curl -fsSL https://dl.k8s.io/release/stable.txt)
+        curl -fsSLo /usr/local/bin/kubectl \
+          "https://dl.k8s.io/release/${KUBECTL_VER}/bin/linux/amd64/kubectl"
+        chmod +x /usr/local/bin/kubectl
+
+        USE_GPU="{{inputs.parameters.use-gpu-triton}}"
+        if [ "${USE_GPU}" = "true" ]; then
+          TRITON_APP_LABEL="triton-server"
+        else
+          TRITON_APP_LABEL="triton-server-cpu"
+        fi
+        TRITON_NS="serving"
+
+        python3 - <<'PYEOF'
+        import os
+        import boto3
+        from botocore.exceptions import ClientError
+
+        onnx_path = os.environ["ONNX_PATH"]
+        if not onnx_path or not onnx_path.startswith("s3://"):
+            print("[WARN] ONNX_PATH not set or invalid, skipping Triton model update")
+            raise SystemExit(0)
+        parsed = onnx_path.replace("s3://", "").split("/")
+        bucket, key = parsed[0], "/".join(parsed[1:])
+        dst = "/tmp/reranker.onnx"
+        s3 = boto3.client("s3")
+        try:
+            s3.head_object(Bucket=bucket, Key=key)
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "")
+            if code in ("404", "NoSuchKey", "NotFound"):
+                print(f"[WARN] ONNX model not found at s3://{bucket}/{key}, skipping Triton update")
+                raise SystemExit(0)
+            raise
+        s3.download_file(bucket, key, dst)
+        print(f"[INFO] downloaded s3://{bucket}/{key}")
+
+        def fetch_if_present(remote_key: str, local_path: str) -> bool:
+            try:
+                s3.head_object(Bucket=bucket, Key=remote_key)
+            except ClientError as e:
+                code = e.response.get("Error", {}).get("Code", "")
+                if code in ("404", "NoSuchKey", "NotFound"):
+                    return False
+                raise
+            s3.download_file(bucket, remote_key, local_path)
+            print(f"[INFO] downloaded s3://{bucket}/{remote_key} -> {local_path}")
+            return True
+
+        fetch_if_present(key + ".data", "/tmp/" + os.path.basename(key + ".data"))
+
+        g_ed = int(os.environ.get("GNN_EMBED_DIM", "128"))
+        feature_dim = 8 * g_ed + 32
+        L, R = chr(123), chr(125)
+        inp_line = f'input [{L} name: "input" data_type: TYPE_FP32 dims: [ {feature_dim} ] {R}]'
+        print(f"[INFO] reranker config.pbtxt input feature_dim={feature_dim} (8*gnn_embed_dim+32)")
+
+        lines = [
+            'name: "reranker"',
+            'backend: "onnxruntime"',
+            'max_batch_size: 512',
+            inp_line,
+            'output [{ name: "output" data_type: TYPE_FP32 dims: [ 1 ] }]',
+            'dynamic_batching { preferred_batch_size: [ 32, 64, 128 ] max_queue_delay_microseconds: 500 }',
+        ]
+        out_cfg = "/tmp/reranker-config.pbtxt"
+        with open(out_cfg, "w") as f:
+            f.write("\n".join(lines) + "\n")
+        print(f"[INFO] wrote {out_cfg}")
+        PYEOF
+
+        NS="{{inputs.parameters.serving-namespace}}"
+        DEPLOY="{{inputs.parameters.serving-deployment}}"
+        kubectl rollout restart "deployment/${DEPLOY}" -n "${NS}"
+        kubectl rollout status "deployment/${DEPLOY}" -n "${NS}" --timeout=300s
+
+        TRITON_POD=$(kubectl get pod -n "${TRITON_NS}" -l "app=${TRITON_APP_LABEL}" \
+          --field-selector=status.phase=Running \
+          -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+
+        if [ -z "${TRITON_POD}" ]; then
+          echo "[WARN] No running pod found for app=${TRITON_APP_LABEL} in ns=${TRITON_NS} — skipping Triton deploy"
+          exit 0
+        fi
+
+        echo "[INFO] deploying to Triton pod: ${TRITON_POD}"
+        kubectl cp /tmp/reranker.onnx "${TRITON_NS}/${TRITON_POD}:/models/reranker/1/model.onnx"
+        for f in /tmp/reranker.onnx.data; do
+          [ -f "$f" ] && kubectl cp "$f" "${TRITON_NS}/${TRITON_POD}:/models/reranker/1/$(basename "$f")"
+        done
+        kubectl cp /tmp/reranker-config.pbtxt "${TRITON_NS}/${TRITON_POD}:/models/reranker/config.pbtxt"
+        kubectl exec -n "${TRITON_NS}" "${TRITON_POD}" -- \
+          curl -fsS -X POST http://localhost:8002/v2/repository/models/reranker/load
+        echo "[INFO] Triton model reloaded successfully"
+      env:
+        - name: ONNX_PATH
+          value: "{{inputs.parameters.onnx-path}}"
+        - name: GNN_EMBED_DIM
+          value: "{{inputs.parameters.gnn-embed-dim}}"
+      envFrom:
+        - secretRef: { name: aws-creds }
+
+  - name: cleanup-collections
+    inputs:
+      parameters:
+      - name: registry
+        value: "trlocne204"
+      - name: milvus-uri
+      - name: milvus-token
+      - name: retention-days
+    script:
+      image: "{{inputs.parameters.registry}}/indexing:latest"
+      command: ["python"]
+      source: |
+        import sys
+        from pymilvus import connections, utility
+        from datetime import datetime, timedelta
+        import re
+
+        milvus_uri = "{{inputs.parameters.milvus-uri}}"
+        milvus_token = "{{inputs.parameters.milvus-token}}"
+        retention_days = int("{{inputs.parameters.retention-days}}")
+        
+        connections.connect("default", uri=milvus_uri, token=milvus_token)
+        
+        # Get all collections
+        all_collections = utility.list_collections()
+        cutoff_date = datetime.now() - timedelta(days=retention_days)
+        
+        for col_name in all_collections:
+            # Skip current active collections
+            if col_name in ["movie_embeddings", "user_embeddings"]:
+                continue
+            
+            # Extract timestamp from collection name (format: movie_embeddings_YYYYMMDDHHMMSS)
+            match = re.search(r'_(\d{14})$', col_name)
+            if match:
+                timestamp_str = match.group(1)
+                try:
+                    col_date = datetime.strptime(timestamp_str, "%Y%m%d%H%M%S")
+                    if col_date < cutoff_date:
+                        print(f"Dropping old collection: {col_name}")
+                        utility.drop_collection(col_name)
+                except ValueError:
+                    print(f"Could not parse timestamp from {col_name}")
