@@ -1,0 +1,18 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Hai layer pip: base nặng (torch/feast/…) cache khi chỉ sửa requirements-app hoặc code.
+COPY src/inference/v1/serving/requirements-base.txt requirements-base.txt
+RUN pip install --no-cache-dir --timeout=300 --retries=5 -r requirements-base.txt
+
+COPY src/inference/v1/serving/requirements-app.txt requirements-app.txt
+RUN pip install --no-cache-dir -r requirements-app.txt
+
+COPY src/ /app/src/
+COPY src/inference/v1/serving/main.py /app/main.py
+
+ENV PYTHONPATH=/app
+EXPOSE 8000
+
+ENTRYPOINT ["python", "/app/main.py"]
