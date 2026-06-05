@@ -73,7 +73,6 @@ spec:
       - name: rerank-num-workers
         value: "4"
 
-      # --- Hyperparameters: GNN ---
       - name: lr-gnn
         value: "1e-3"
       - name: embed-dim-gnn
@@ -83,7 +82,6 @@ spec:
       - name: reg-weight-gnn
         value: "1e-4"
 
-      # --- Hyperparameters: Re-ranker ---
       - name: lr-rerank
         value: "1e-3"
       - name: embed-dim-rerank
@@ -93,7 +91,6 @@ spec:
       - name: weight-decay-rerank
         value: "1e-3"
 
-      # --- Dataset & Indexing ---
       - name: val-ratio
         value: "0.1"
       - name: test-ratio
@@ -103,7 +100,6 @@ spec:
       - name: es-index
         value: "recsys-movies"
 
-      # --- Resources (Container) ---
       - name: cpu-limit
         value: "1"
       - name: memory-limit
@@ -113,7 +109,6 @@ spec:
       - name: memory-request
         value: "1Gi"
 
-      # --- Resources: Ray Head ---
       - name: cpu-limit-head
         value: "4"
       - name: memory-limit-head
@@ -123,7 +118,6 @@ spec:
       - name: memory-request-head
         value: "4Gi"
 
-      # --- Resources: Ray Worker ---
       - name: cpu-limit-worker
         value: "4"
       - name: memory-limit-worker
@@ -673,7 +667,7 @@ spec:
           - name: PRODUCTION_ALIAS
             value: "production"
           - name: S3_BASE_PREFIX
-            value: "{{workflow.parameters.s3-base-path}}"
+            value: "s3://recsys-moivelens/processed/production"
           - name: CORRELATION_ID
             value: "{{workflow.uid}}"
           - name: METRIC_KEY
