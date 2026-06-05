@@ -46,6 +46,11 @@ spec:
           ports:
             - containerPort: {{ .Values.mlflow.service.port }}
           env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-creds
+                  key: DB_PASSWORD
             - name: AWS_DEFAULT_REGION
               value: {{ .Values.aws.region | quote }}
             - name: AWS_REGION
