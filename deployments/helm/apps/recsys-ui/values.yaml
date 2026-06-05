@@ -11,7 +11,7 @@ service:
   targetPort: 3000
 
 env:
-  recsysApiBaseUrl: "http://serving:8000"
+  recsysApiBaseUrl: "http://serving.serving.svc.cluster.local:8000"
 
 resources:
   requests:
