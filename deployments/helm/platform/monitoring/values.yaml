@@ -1,0 +1,423 @@
+# =============================================================================
+# recsys-monitoring — values.yaml
+#
+# Bọc 3 subchart:
+#   kube-prometheus-stack  →  Prometheus + Grafana + Alertmanager + node-exporter
+#   loki                   →  Log aggregation
+#   alloy                  →  DaemonSet log collector (thay Promtail)
+#
+# Deploy:
+#   cd deployments/helm/platform/monitoring
+#   helm dependency update
+#   helm upgrade --install recsys-monitoring . \
+#     -n monitoring --create-namespace -f values.yaml --wait --timeout 5m
+#
+# Slack: set SLACK_WEBHOOK_URL trước khi deploy để bật alert
+# =============================================================================
+
+# -- kube-prometheus-stack ----------------------------------------------------
+kube-prometheus-stack:
+  enabled: true
+
+  # -- Prometheus --
+  prometheus:
+    prometheusSpec:
+      retention: 15d
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            accessModes: [ReadWriteOnce]
+            resources:
+              requests:
+                storage: 10Gi
+      externalLabels:
+        cluster: "recsys"
+        environment: "production"
+      # Mount custom alert rules từ ConfigMap
+      ruleSelector:
+        matchLabels:
+          app: recsys-alerts
+      additionalScrapeConfigs:
+        - job_name: recsys-serving
+          metrics_path: /metrics
+          kubernetes_sd_configs:
+            - role: pod
+              namespaces:
+                names: [serving]
+          relabel_configs:
+            - source_labels: [__meta_kubernetes_pod_label_app]
+              action: keep
+              regex: serving
+            - source_labels: [__meta_kubernetes_pod_ip]
+              target_label: __address__
+              replacement: $1:8000
+            - source_labels: [__meta_kubernetes_pod_name]
+              target_label: pod
+            - source_labels: [__meta_kubernetes_namespace]
+              target_label: namespace
+
+        - job_name: recsys-triton
+          metrics_path: /metrics
+          kubernetes_sd_configs:
+            - role: pod
+              namespaces:
+                names: [serving]
+          relabel_configs:
+            - source_labels: [__meta_kubernetes_pod_label_app]
+              action: keep
+              regex: triton
+            - source_labels: [__meta_kubernetes_pod_ip]
+              target_label: __address__
+              replacement: $1:8002
+            - source_labels: [__meta_kubernetes_pod_name]
+              target_label: pod
+
+        - job_name: mlflow
+          metrics_path: /metrics
+          kubernetes_sd_configs:
+            - role: pod
+              namespaces:
+                names: [mlflow]
+          relabel_configs:
+            - source_labels: [__meta_kubernetes_pod_label_app]
+              action: keep
+              regex: mlflow
+            - source_labels: [__meta_kubernetes_pod_ip]
+              target_label: __address__
+              replacement: $1:5000
+
+        - job_name: argo-workflows
+          metrics_path: /metrics
+          kubernetes_sd_configs:
+            - role: pod
+              namespaces:
+                names: [argo]
+          relabel_configs:
+            - source_labels: [__meta_kubernetes_pod_label_app]
+              action: keep
+              regex: argo-server
+            - source_labels: [__meta_kubernetes_pod_ip]
+              target_label: __address__
+              replacement: $1:9090
+
+        - job_name: kafka
+          kubernetes_sd_configs:
+            - role: pod
+              namespaces:
+                names: [kafka]
+          relabel_configs:
+            - source_labels: [__meta_kubernetes_pod_label_app]
+              action: keep
+              regex: kafka
+            - source_labels: [__meta_kubernetes_pod_ip]
+              target_label: __address__
+              replacement: $1:9404
+
+      nodeSelector:
+        kubernetes.io/os: linux
+      tolerations:
+        - key: CriticalAddonsOnly
+          operator: Exists
+          effect: NoSchedule
+      resources:
+        requests:
+          cpu: 200m
+          memory: 512Mi
+        limits:
+          cpu: 500m
+          memory: 1Gi
+
+  # -- Grafana --
+  grafana:
+    enabled: true
+    adminPassword: recsys-grafana
+    service:
+      type: NodePort
+      nodePort: 30300
+    persistence:
+      enabled: true
+      size: 2Gi
+    nodeSelector:
+      kubernetes.io/os: linux
+    tolerations:
+      - key: CriticalAddonsOnly
+        operator: Exists
+        effect: NoSchedule
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 300m
+        memory: 512Mi
+    # Datasource Loki tự động provision
+    additionalDataSources:
+      - name: Loki
+        type: loki
+        access: proxy
+        url: http://recsys-monitoring-loki:3100
+        isDefault: false
+        jsonData:
+          maxLines: 1000
+      - name: Tempo
+        type: tempo
+        access: proxy
+        url: http://recsys-monitoring-tempo:3100
+        isDefault: false
+        jsonData:
+          httpMethod: GET
+          serviceMap:
+            datasourceUid: prometheus
+    # Load dashboard RecSys từ ConfigMap
+    sidecar:
+      dashboards:
+        enabled: true
+        label: grafana-dashboard
+        labelValue: "true"
+        searchNamespace: monitoring
+
+  # -- Alertmanager --
+  alertmanager:
+    alertmanagerSpec:
+      nodeSelector:
+        kubernetes.io/os: linux
+      tolerations:
+        - key: CriticalAddonsOnly
+          operator: Exists
+          effect: NoSchedule
+      storage:
+        volumeClaimTemplate:
+          spec:
+            accessModes: [ReadWriteOnce]
+            resources:
+              requests:
+                storage: 1Gi
+    config:
+      global:
+        resolve_timeout: 5m
+      route:
+        group_by: [alertname, cluster, component]
+        group_wait: 10s
+        group_interval: 10s
+        repeat_interval: 12h
+        receiver: "null"   # tránh crash khi webhook chưa deploy
+        routes:
+          - match:
+              severity: critical
+            receiver: critical
+            continue: true
+          - match:
+              severity: warning
+            receiver: warning
+          - match:
+              component: serving
+            receiver: ml-team
+          - match:
+              component: triton
+            receiver: ml-team
+          - match:
+              component: feast
+            receiver: ml-team
+      receivers:
+        - name: "null"
+        - name: default
+          webhook_configs:
+            - url: http://webhook-receiver.monitoring.svc.cluster.local:8080/alerts
+              send_resolved: true
+        - name: critical
+          slack_configs:
+            - api_url: "$SLACK_WEBHOOK_URL"
+              channel: "#recsys-alerts-critical"
+              title: ":fire: [CRITICAL] {{ .GroupLabels.alertname }}"
+              text: "{{ range .Alerts }}{{ .Annotations.summary }}\n{{ end }}"
+              send_resolved: true
+          webhook_configs:
+            - url: http://webhook-receiver.monitoring.svc.cluster.local:8080/critical
+              send_resolved: true
+        - name: warning
+          webhook_configs:
+            - url: http://webhook-receiver.monitoring.svc.cluster.local:8080/warning
+              send_resolved: true
+        - name: ml-team
+          slack_configs:
+            - api_url: "$SLACK_WEBHOOK_URL"
+              channel: "#recsys-ml-alerts"
+              title: ":warning: [ML] {{ .GroupLabels.alertname }}"
+              text: "{{ range .Alerts }}{{ .Annotations.summary }}\n{{ end }}"
+              send_resolved: true
+          webhook_configs:
+            - url: http://webhook-receiver.monitoring.svc.cluster.local:8080/ml-alerts
+              send_resolved: true
+        - name: model-promote
+          slack_configs:
+            - api_url: "$SLACK_WEBHOOK_URL"
+              channel: "#recsys-deploys"
+              title: ":rocket: Model promoted to production"
+              text: "{{ range .Alerts }}{{ .Annotations.summary }}\n{{ end }}"
+              send_resolved: false
+      inhibit_rules:
+        - source_match:
+            severity: critical
+          target_match:
+            severity: warning
+          equal: [alertname, cluster, component]
+
+  # -- node-exporter --
+  nodeExporter:
+    enabled: true   # kube-prometheus-stack t? deploy DaemonSet node-exporter
+    nodeSelector:
+      kubernetes.io/os: linux
+
+  # -- kube-state-metrics --
+  kubeStateMetrics:
+    enabled: true
+
+  # -- Prometheus Operator --
+  prometheusOperator:
+    nodeSelector:
+      kubernetes.io/os: linux
+    tolerations:
+      - key: CriticalAddonsOnly
+        operator: Exists
+        effect: NoSchedule
+
+# -- Loki --------------------------------------------------------------------
+loki:
+  enabled: true
+  deploymentMode: SingleBinary
+  singleBinary:
+    replicas: 1
+    nodeSelector:
+      kubernetes.io/os: linux
+    tolerations:
+      - key: CriticalAddonsOnly
+        operator: Exists
+        effect: NoSchedule
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 300m
+        memory: 512Mi
+  loki:
+    auth_enabled: false
+    storage:
+      type: filesystem
+    commonConfig:
+      replication_factor: 1
+    schemaConfig:
+      configs:
+        - from: "2024-01-01"
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+  persistence:
+    enabled: true
+    size: 20Gi
+  # Disable gateway + separate backend (SingleBinary is sufficient for this scale)
+  gateway:
+    enabled: false
+  backend:
+    replicas: 0
+  read:
+    replicas: 0
+  write:
+    replicas: 0
+
+# -- Tempo (distributed tracing) ---------------------------------------------
+tempo:
+  enabled: true
+  tempo:
+    storage:
+      trace:
+        backend: local
+        local:
+          path: /var/tempo/traces
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 300m
+        memory: 512Mi
+  persistence:
+    enabled: true
+    size: 10Gi
+  nodeSelector:
+    kubernetes.io/os: linux
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Exists
+      effect: NoSchedule
+
+# -- Grafana Alloy (log collector DaemonSet) ----------------------------------
+alloy:
+  enabled: true
+  controller:
+    type: daemonset
+  rbac:
+    create: true
+  serviceAccount:
+    create: true
+  alloy:
+    extraEnv:
+      - name: NODE_NAME
+        valueFrom:
+          fieldRef:
+            fieldPath: spec.nodeName
+    configMap:
+      create: true
+      content: |
+        logging {
+          level  = "info"
+          format = "logfmt"
+        }
+
+        discovery.kubernetes "pods" {
+          role = "pod"
+        }
+
+        discovery.relabel "pods" {
+          targets = discovery.kubernetes.pods.targets
+          rule {
+            source_labels = ["__meta_kubernetes_namespace"]
+            target_label  = "namespace"
+          }
+          rule {
+            source_labels = ["__meta_kubernetes_pod_name"]
+            target_label  = "pod"
+          }
+          rule {
+            source_labels = ["__meta_kubernetes_pod_container_name"]
+            target_label  = "container"
+          }
+          rule {
+            source_labels = ["__meta_kubernetes_pod_label_app"]
+            target_label  = "app"
+          }
+          // Only keep namespaces relevant to recsys
+          rule {
+            source_labels = ["__meta_kubernetes_namespace"]
+            regex         = "serving|mlflow|argo|kafka|infra|jenkins|monitoring"
+            action        = "keep"
+          }
+        }
+
+        loki.source.kubernetes "pods_filtered" {
+          targets    = discovery.relabel.pods.output
+          forward_to = [loki.write.endpoint.receiver]
+        }
+
+        loki.write "endpoint" {
+          endpoint {
+            url = "http://recsys-monitoring-loki:3100/loki/api/v1/push"
+          }
+        }
+  nodeSelector:
+    kubernetes.io/os: linux
+  tolerations:
+    - operator: Exists   # DaemonSet runs on every node
