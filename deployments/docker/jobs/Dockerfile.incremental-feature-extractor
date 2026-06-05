@@ -1,0 +1,16 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY workflows/steps/incremental_feature_extractor/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY src/feature_repo /app/src/feature_repo
+
+COPY workflows/steps/incremental_feature_extractor/main.py /app/main.py
+
+RUN mkdir -p /app/certs
+
+ENV PYTHONPATH=/app
+
+ENTRYPOINT ["python", "/app/main.py"]

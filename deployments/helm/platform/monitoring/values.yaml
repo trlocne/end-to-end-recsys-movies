@@ -1,4 +1,3 @@
-# =============================================================================
 # recsys-monitoring — values.yaml
 #
 # Bọc 3 subchart:
@@ -13,13 +12,10 @@
 #     -n monitoring --create-namespace -f values.yaml --wait --timeout 5m
 #
 # Slack: set SLACK_WEBHOOK_URL trước khi deploy để bật alert
-# =============================================================================
 
-# -- kube-prometheus-stack ----------------------------------------------------
 kube-prometheus-stack:
   enabled: true
 
-  # -- Prometheus --
   prometheus:
     prometheusSpec:
       retention: 15d
@@ -127,7 +123,6 @@ kube-prometheus-stack:
           cpu: 500m
           memory: 1Gi
 
-  # -- Grafana --
   grafana:
     enabled: true
     adminPassword: recsys-grafana
@@ -176,7 +171,6 @@ kube-prometheus-stack:
         labelValue: "true"
         searchNamespace: monitoring
 
-  # -- Alertmanager --
   alertmanager:
     alertmanagerSpec:
       secrets:
@@ -268,17 +262,14 @@ kube-prometheus-stack:
             severity: warning
           equal: [alertname, cluster, component]
 
-  # -- node-exporter --
   nodeExporter:
     enabled: true   # kube-prometheus-stack t? deploy DaemonSet node-exporter
     nodeSelector:
       kubernetes.io/os: linux
 
-  # -- kube-state-metrics --
   kubeStateMetrics:
     enabled: true
 
-  # -- Prometheus Operator --
   prometheusOperator:
     nodeSelector:
       kubernetes.io/os: linux
@@ -287,7 +278,6 @@ kube-prometheus-stack:
         operator: Exists
         effect: NoSchedule
 
-# -- Loki --------------------------------------------------------------------
 loki:
   enabled: true
   deploymentMode: SingleBinary
@@ -334,7 +324,6 @@ loki:
   write:
     replicas: 0
 
-# -- Tempo (distributed tracing) ---------------------------------------------
 tempo:
   enabled: true
   tempo:
@@ -360,7 +349,6 @@ tempo:
       operator: Exists
       effect: NoSchedule
 
-# -- Grafana Alloy (log collector DaemonSet) ----------------------------------
 alloy:
   enabled: true
   controller:

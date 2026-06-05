@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-connect
+  namespace: infra
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka-connect
+  template:
+    metadata:
+      labels:
+        app: kafka-connect
+    spec:
+      initContainers:
+      - name: install-debezium
+        image: debezium/connect:2.5.0.Final
+        command:
+        - sh
+        - -c
+        - cp -rL /kafka/connect/debezium-connector-postgres /plugins/
+        volumeMounts:
+        - name: connector-plugins
+          mountPath: /plugins
+      containers:
+      - name: connect
+        image: confluentinc/cp-kafka-connect:7.6.0
+        ports:
+        - containerPort: 8083
+        env:
+        - name: CONNECT_BOOTSTRAP_SERVERS
+          value: kafka-kafka-bootstrap.kafka.svc.cluster.local:9092
+        - name: CONNECT_GROUP_ID
+          value: "1"
+        - name: CONNECT_CONFIG_STORAGE_TOPIC
+          value: connect_configs
+        - name: CONNECT_OFFSET_STORAGE_TOPIC
+          value: connect_offsets
+        - name: CONNECT_STATUS_STORAGE_TOPIC
+          value: connect_statuses
+        # Connect defaults replication factor to 3; this cluster has 2 brokers (see kafka-cluster.yaml).
+        # Without these, internal topics fail to create → TimeoutException → REST never stays up → port-forward :8083 refuses.
+        - name: CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR
+          value: "2"
+        - name: CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR
+          value: "2"
+        - name: CONNECT_STATUS_STORAGE_REPLICATION_FACTOR
+          value: "2"
+        - name: CONNECT_KEY_CONVERTER
+          value: io.confluent.connect.avro.AvroConverter
+        - name: CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL
+          value: http://schema-reg.infra.svc.cluster.local:8081
+        - name: CONNECT_VALUE_CONVERTER
+          value: io.confluent.connect.avro.AvroConverter
+        - name: CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL
+          value: http://schema-reg.infra.svc.cluster.local:8081
+        - name: CONNECT_REST_ADVERTISED_HOST_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: CONNECT_PLUGIN_PATH
+          value: /usr/share/java,/plugins
+        - name: CONNECT_TOPIC_CREATION_ENABLE
+          value: "true"
+        volumeMounts:
+        - name: connector-plugins
+          mountPath: /plugins
+        readinessProbe:
+          httpGet:
+            path: /connectors
+            port: 8083
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          failureThreshold: 10
+        livenessProbe:
+          httpGet:
+            path: /connectors
+            port: 8083
+          initialDelaySeconds: 60
+          periodSeconds: 20
+          failureThreshold: 5
+      volumes:
+      - name: connector-plugins
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-connect
+  namespace: infra
+spec:
+  selector:
+    app: kafka-connect
+  ports:
+  - name: http
+    port: 8083
+    targetPort: 8083

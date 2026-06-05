@@ -1,0 +1,25 @@
+# ONNX export for Jenkins. onnxscript is required by torch>=2.11 torch.onnx.export (internal importer).
+# Build: docker build -f deployments/helm/jenkins-helm/Dockerfile.onnx-export -t trlocne204/onnx-export:v1.3 .
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir \
+    "mlflow>=2.10" \
+    "torch>=2.1" \
+    "onnx>=1.15" \
+    "onnxscript>=0.1" \
+    "boto3>=1.28"
+
+COPY src /app/src
+COPY deployments/helm/jenkins-helm/onnx_export.py /app/onnx_export.py
+
+ENV PYTHONPATH=/app
+
+ENTRYPOINT ["python3", "/app/onnx_export.py"]

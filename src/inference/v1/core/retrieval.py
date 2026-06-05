@@ -89,56 +89,12 @@ def recommend_similar_items(
         candidates_ids = np.argsort(-scores.ravel()).tolist()
         candidates_ids = [i for i in candidates_ids if i != item_id][:k]
 
-    if len(item_emb) == 0 and batch_item_embs is not None:
-        need = [int(item_id)] + [int(x) for x in candidates_ids]
-        emb_map = batch_item_embs(need) or {}
-
-    results  = []
-    user_vec = None
-    if user_id is not None:
-        if user_emb is not None and len(user_emb) > 0 and user_id < len(user_emb):
-            user_vec = user_emb[user_id]
-        elif fallback_user_emb is not None:
-            # Pre-computed mean passed from caller — no recompute per request
-            user_vec = fallback_user_emb
-        elif user_emb is not None and len(user_emb) > 0:
-            user_vec = np.mean(user_emb, axis=0)
-
-    def _item_vec_at(idx: int) -> np.ndarray:
-        if emb_map:
-            v = emb_map.get(int(idx))
-            if v is None:
-                return np.array([], dtype=np.float32)
-            return np.asarray(v, dtype=np.float32).ravel()
-        if get_item_emb is not None:
-            return np.asarray(get_item_emb(idx), dtype=np.float32).ravel()
-        return item_emb[idx]
-
-    src_emb = _item_vec_at(item_id)
-    if src_emb.size == 0:
-        return []
-
-    for idx in candidates_ids:
-        i_emb = _item_vec_at(int(idx))
-        # Item similarity (cosine)
-        item_sim  = float(
-            np.dot(src_emb, i_emb) /
-            (np.linalg.norm(src_emb) * np.linalg.norm(i_emb) + 1e-8)
-        )
-        # User preference (if user exists)
-        user_pref = float(np.dot(user_vec, i_emb)) if user_vec is not None else 0.0
-        combined  = alpha * item_sim + (1 - alpha) * user_pref
-
-        results.append({
-            "item_id":          idx,
-            "item_similarity":  item_sim,
-            "user_preference":  user_pref,
-            "ann_score":        combined,
-            "source":           "item2item",
-        })
-
-    results.sort(key=lambda d: d["ann_score"], reverse=True)
-    return results[:k]
+    # Stage 1: pure item similarity — DeepFM will personalize in stage 2
+    results = [
+        {"item_id": int(idx), "ann_score": 1.0 - (i / max(len(candidates_ids), 1)), "source": "item2item"}
+        for i, idx in enumerate(candidates_ids[:k])
+    ]
+    return results
 
 def local_keyword_search(
     query: str,
@@ -167,9 +123,9 @@ def recommend_search(
     embed_dim: int = 64,
     batch_resolve_item_embs: Optional[Callable[[List[int]], Dict[int, np.ndarray]]] = None,
 ) -> List[Dict]:
+    """BM25-first search: ES retrieves candidates by keyword, DeepFM reranks for personalization."""
 
-    search_candidates: set = set()
-    bm25_scores_map: Dict[int, float] = {}
+    candidates: List[Dict] = []
 
     if es_client is not None:
         try:
@@ -187,80 +143,26 @@ def recommend_search(
             max_score = res["hits"]["max_score"] or 1.0
             for hit in hits:
                 idx_str = hit["_source"].get("item_idx", hit["_id"])
-                idx = int(idx_str)
-                bm25_scores_map[idx] = hit["_score"] / max_score
-                search_candidates.add(idx)
+                candidates.append({
+                    "item_id":    int(idx_str),
+                    "bm25_score": hit["_score"] / max_score,
+                    "ann_score":  hit["_score"] / max_score,
+                    "source":     "bm25",
+                })
         except Exception as e:
-            print(f"[Search] ES failed: {e}")
+            logger.warning("ES search failed: %s", e)
 
-    if not search_candidates and metadata_df is not None:
+    if not candidates and metadata_df is not None:
         fallback_ids = local_keyword_search(query, metadata_df, k=k)
         for idx in fallback_ids:
-            bm25_scores_map[idx] = 1.0 # Give high score to exact title matches
-            search_candidates.add(idx)
+            candidates.append({
+                "item_id":    idx,
+                "bm25_score": 1.0,
+                "ann_score":  1.0,
+                "source":     "local_fallback",
+            })
 
-    cf_candidates = set()
-    if milvus_collection is not None and user_emb is not None:
-        if user_id is not None and user_id < len(user_emb):
-            user_vec = user_emb[user_id].astype(np.float32).tolist()
-        else:
-            user_vec = np.mean(user_emb, axis=0).astype(np.float32).tolist()
-        search_params = {"metric_type": "IP", "params": {"ef": 64}}
-        results = milvus_collection.search(
-            data=[user_vec],
-            anns_field="embedding",
-            param=search_params,
-            limit=k,
-        )
-        cf_candidates = {hit.id for hit in results[0]}
-    elif item_emb is not None and len(item_emb) > 0 and user_emb is not None:
-        if user_id is not None and user_id < len(user_emb):
-            user_vec_np = user_emb[user_id].reshape(1, -1)
-        else:
-            user_vec_np = np.mean(user_emb, axis=0).reshape(1, -1)
-        cf_scores = item_emb @ user_vec_np.T
-        cf_candidates = set(np.argsort(-cf_scores.ravel())[:k].tolist())
-
-
-    all_candidates = search_candidates | cf_candidates
-
-    item_vec_by_id: Optional[Dict[int, np.ndarray]] = None
-    if batch_resolve_item_embs is not None and (item_emb is None or len(item_emb) == 0) and all_candidates:
-        item_vec_by_id = batch_resolve_item_embs(list(all_candidates))
-
-    if user_emb is not None and len(user_emb) > 0:
-        if user_id is not None and user_id < len(user_emb):
-            user_vec_flat = user_emb[user_id]
-        else:
-            user_vec_flat = np.mean(user_emb, axis=0)
-    else:
-        user_vec_flat = np.zeros(embed_dim, dtype=np.float32)
-    results = []
-    for idx in all_candidates:
-        bm25_score = bm25_scores_map.get(idx, 0.0)
-        if item_vec_by_id is not None:
-            i_vec = item_vec_by_id.get(idx)
-            if i_vec is None:
-                continue
-        elif get_item_emb is not None:
-            i_vec = np.asarray(get_item_emb(idx), dtype=np.float32).ravel()
-        elif item_emb is not None and len(item_emb) > idx:
-            i_vec = item_emb[idx]
-        else:
-            continue
-        cf_score   = float(np.dot(user_vec_flat, i_vec))
-        cf_norm    = (cf_score + 1) / 2   # normalize to ~[0,1]
-        final      = alpha * bm25_score + (1 - alpha) * cf_norm
-        results.append({
-            "item_id":      idx,
-            "bm25_score":   bm25_score,
-            "cf_score":     cf_norm,
-            "ann_score":    final,
-            "source":       "hybrid",
-        })
-
-    results.sort(key=lambda d: d["ann_score"], reverse=True)
-    return results[:k]
+    return candidates[:k]
 
 def weighted_score_fusion(
     ranked_lists: Dict[str, List[Dict]],
@@ -355,12 +257,18 @@ def mmr_rerank(
             reverse=True,
         )[:top_k]
 
-    # Normalize relevance scores to [0, 1] so they are on the same scale as cosine similarity
-    raw_scores = [c.get("rerank_score", c.get("ann_score", 0.0)) for c in candidates]
-    min_s, max_s = min(raw_scores), max(raw_scores)
-    score_range = max_s - min_s if max_s > min_s else 1.0
-    for c, s in zip(candidates, raw_scores):
-        c["_norm_score"] = (s - min_s) / score_range
+    # rerank_score is already in [0,1] (sigmoid output) — use directly.
+    # ann_score from Milvus Inner Product is unbounded — normalize to [0,1].
+    has_rerank = any("rerank_score" in c for c in candidates)
+    if has_rerank:
+        for c in candidates:
+            c["_norm_score"] = float(c.get("rerank_score", 0.0))
+    else:
+        raw_scores = [c.get("ann_score", 0.0) for c in candidates]
+        min_s, max_s = min(raw_scores), max(raw_scores)
+        score_range = max_s - min_s if max_s > min_s else 1.0
+        for c, s in zip(candidates, raw_scores):
+            c["_norm_score"] = (s - min_s) / score_range
 
     def _emb(item_id: int) -> np.ndarray:
         if get_item_emb is not None:

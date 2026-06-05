@@ -1,0 +1,56 @@
+# Reference-only unified config — NOT loaded by training, serving, or Argo.
+# Runtime uses: Argo/workflow parameters, env vars, configs/serving_config.yaml (often mirrored on S3),
+# and configs/training/*.yaml for Feast-driven training features.
+# Copy or cherry-pick values when bootstrapping experiments; do not assume the app reads this file.
+
+data:
+  movielens_path: "./src/data/movielens_20m"
+  min_rating: 4.0
+  min_interactions: 5
+  test_ratio: 0.1
+  val_ratio: 0.1
+
+model:
+  embed_dim: 64
+  num_layers: 3
+  num_heads: 4
+  dropout: 0.2
+  temperature: 0.07
+  lightgcn:
+    num_layers: 3
+    embedding_dim: 64
+
+training:
+  batch_size: 512
+  num_epochs: 20
+  learning_rate: 1.0e-3
+  weight_decay: 1.0e-5
+  num_negatives: 4
+  eval_every: 5
+  early_stopping_patience: 5
+
+reranker:
+  embed_dim: 64
+  dropout: 0.3
+  batch_size: 256
+  learning_rate: 1.0e-3
+
+retrieval:
+  top_k_candidates: 500
+  top_k_final: 20
+
+inference:
+  host: "0.0.0.0"
+  port: 8000
+  model_path: "./models/production"
+  index_path: "./data/ann_index"
+
+elasticsearch:
+  uri: "http://elasticsearch.infra.svc.cluster.local:9200"
+  api_key: ""          # không cần auth với ES in-cluster
+  index: "recsys-movies"
+
+milvus:
+  uri: "http://milvus.infra.svc.cluster.local:19530"
+  token: ""            # không cần token với Milvus standalone in-cluster
+  collection: "movie_embeddings"

@@ -1,0 +1,96 @@
+# Incremental Learning Configuration
+# Stored at: s3://recsys-moivelens/processed/production/incremental_config.yaml
+# Data engineers can update this file without modifying workflows
+
+feature_paths:
+  # Static features (genre, tag, etc.) - cached, rarely changes
+  static: "s3://recsys-moivelens/processed/production/static_features.pt"
+  
+  # Incremental delta features (new users/items since last run)
+  delta: "s3://recsys-moivelens/processed/production/incremental/features_delta.pt"
+  
+  # Last processed timestamp for delta tracking
+  last_timestamp: "s3://recsys-moivelens/processed/production/incremental/last_processed_timestamp.txt"
+  
+  # Full features (fallback if incremental fails)
+  full: "s3://recsys-moivelens/processed/production/data-prep/features.pt"
+
+feast:
+  # Feast feature store configuration — merged from duplicate keys
+  repo_path: "s3://recsys-moivelens/processed/feature_repo"
+  enabled: true
+  offline_store:
+    type: file
+    path: "s3://recsys-moivelens/processed/feast-features/"
+  online_store:
+    type: redis
+    connection_string: ""  # set via REDIS_URL env var or K8s secret
+  registry: "s3://recsys-moivelens/processed/feast-features/registry/registry.db"
+
+  # Feast features to load for incremental training
+  user_features:
+    - "user_avg_rating"
+    - "user_rating_count"
+    - "user_genre_preference"
+
+  item_features:
+    - "item_avg_rating"
+    - "item_rating_count"
+    - "item_popularity"
+
+incremental:
+  enabled: true
+  
+  fallback_to_full: true
+  batch_size: 1000
+  
+  # Maximum users/items to process in one run
+  max_incremental_users: 10000
+  max_incremental_items: 10000
+  
+  # Minimum threshold to trigger incremental run
+  min_new_users: 10
+  min_new_items: 10
+
+kafka:
+  enabled: false  # Disabled for incremental extractor - uses Feast instead
+  bootstrap_servers: "kafka-3017f4c3-sean-recsys.j.aivencloud.com:17585"
+  topic: "recsys-events"
+  consumer_group: "incremental-feature-extractor"
+  auto_offset_reset: "latest"
+  security_protocol: "SSL"
+  ssl_cafile: "/app/certs/ca.pem"
+  ssl_certfile: "/app/certs/service.cert"
+  ssl_keyfile: "/app/certs/service.key"
+  topics:
+    cdc_interactions: "recsys-cdc-interactions"
+    cdc_users: "recsys-cdc-users"
+    cdc_items: "recsys-cdc-items"
+    validated: "recsys-events-validated"
+    invalid: "recsys-events-invalid"
+
+postgres:
+  enabled: true
+  host: "pg-30130064-seanhcmut05.c.aivencloud.com"
+  port: "27400"
+  database: "defaultdb"
+  user: "avnadmin"
+  password: ""  # set via DB_PASSWORD env var or K8s secret
+  sslmode: "require"
+
+offline_storage:
+  s3_path: "s3://recsys-moivelens/processed/feast-features/"
+  parquet_partition: "date"
+
+realtime:
+  enabled: true
+  online_store:
+    type: redis
+    host: "valkey-1fd0fa69-sean-recsys.a.aivencloud.com"
+    port: 17584
+    password: ""  # set via REDIS_PASSWORD env var or K8s secret
+    ssl: true
+
+sparse_matrix:
+  enabled: true
+  sparse_threshold: 0.1 

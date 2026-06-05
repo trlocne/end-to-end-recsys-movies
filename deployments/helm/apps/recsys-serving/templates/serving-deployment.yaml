@@ -1,0 +1,82 @@
+{{- if .Values.serving.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "recsys-serving.fullname" . }}-serving
+  labels:
+    {{- include "recsys-serving.labels" . | nindent 4 }}
+    app: recsys-serving
+spec:
+  replicas: {{ .Values.serving.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "recsys-serving.selectorLabels" . | nindent 6 }}
+      app: recsys-serving
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "recsys-serving.selectorLabels" . | nindent 8 }}
+        app: recsys-serving
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: serving
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.serving.image.repository }}:{{ .Values.serving.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.serving.service.targetPort }}
+              protocol: TCP
+          env:
+            - name: USER_EMB_S3
+              value: {{ .Values.serving.env.userEmbS3 | quote }}
+            - name: ITEM_EMB_S3
+              value: {{ .Values.serving.env.itemEmbS3 | quote }}
+            - name: RERANKER_S3
+              value: {{ .Values.serving.env.rerankerS3 | quote }}
+              value: {{ .Values.serving.env.embeddingSource | default "parquet" | quote }}
+            - name: GNN_EMBED_DIM
+              value: {{ .Values.serving.env.gnnEmbedDim | default "128" | quote }}
+            {{- if .Values.serving.databaseUrlSecretName }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.serving.databaseUrlSecretName }}
+                  key: {{ .Values.serving.databaseUrlSecretKey | default "DATABASE_URL" }}
+            {{- end }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.infra.awsCredsSecretName }}
+                  key: {{ .Values.infra.awsAccessKeyKey }}
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.infra.awsCredsSecretName }}
+                  key: {{ .Values.infra.awsSecretKeyKey }}
+          resources:
+            {{- toYaml .Values.serving.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

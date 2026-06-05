@@ -1,0 +1,12 @@
+numpy<2.0.0
+torch
+torch-geometric
+ray[tune,train,default]==2.54.0
+pandas
+boto3
+pyarrow
+mlflow
+s3fs==2024.3.1
+fsspec==2024.3.1
+click~=8.0.0
+optuna==4.2.1

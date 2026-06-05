@@ -1,0 +1,44 @@
+controller:
+  image:
+    registry: docker.io
+    repository: jenkins/jenkins
+    tag: "2.555.1-jdk21"
+
+  # Keep controller lightweight; heavy tooling belongs on agents.
+  admin:
+    createSecret: true
+    user: "admin"
+    password: "admin123"
+
+  installPlugins:
+    - kubernetes
+    - workflow-aggregator
+    - git
+    - configuration-as-code
+
+agent:
+  enabled: true
+  image:
+    repository: "trlocne204/jenkins-agent"
+    tag: "py3-tools"
+  alwaysPullImage: true
+  workingDir: "/home/jenkins/agent"
+
+  # Default pod resources for jnlp agent.
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "2Gi"
+
+persistence:
+  enabled: true
+  size: "20Gi"
+
+rbac:
+  create: true
+
+serviceAccount:
+  create: true

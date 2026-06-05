@@ -1,0 +1,12 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir mlflow requests pyyaml
+
+COPY src/ /app/src/
+COPY src/utils/model_gate_webhook.py /app/main.py
+
+ENV PYTHONPATH=/app
+
+ENTRYPOINT ["python", "/app/main.py"]

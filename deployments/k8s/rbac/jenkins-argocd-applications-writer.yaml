@@ -1,0 +1,31 @@
+# Optional — chỉ khi đã cài Argo CD và namespace argocd tồn tại.
+#
+# Allows Jenkins to create/update Argo CD Application resources in namespace argocd.
+# Prerequisite: namespace argocd exists (Argo CD installed there).
+#   kubectl apply -f deployments/k8s/rbac/jenkins-argocd-applications-writer.yaml
+#
+# Pair with: jenkins-kubectl-crd-readonly.yaml (CRD list for kubectl validation).
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jenkins-argocd-applications
+  namespace: argocd
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-argocd-applications
+  namespace: argocd
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: jenkins-argocd-applications
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: jenkins

@@ -1,0 +1,34 @@
+# Allows Argo Workflow pods (serviceAccountName: argo-workflow-sa) to run Triton hot-deploy
+# (template rollout-serving-triton-deploy in serving-update WorkflowTemplate):
+# kubectl get pod, kubectl cp, kubectl exec in namespace serving (Triton + serving API).
+# Apply: kubectl apply -f deployments/k8s/rbac/argo-workflow-triton-exec.yaml
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-workflow-triton-exec
+  namespace: serving
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-workflow-triton-exec
+  namespace: serving
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: argo-workflow-triton-exec
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow-sa
+    namespace: argo

@@ -1,0 +1,4 @@
+# Cài đủ (local venv): pip install -r requirements.txt
+# Docker: Dockerfile dùng requirements-base + requirements-app riêng để cache layer.
+-r requirements-base.txt
+-r requirements-app.txt

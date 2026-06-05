@@ -1,0 +1,4 @@
+feast[aws,redis]==0.61.0
+pandas>=2.2.0
+confluent-kafka[schemaregistry]
+fastavro

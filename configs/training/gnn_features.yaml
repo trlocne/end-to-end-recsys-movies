@@ -1,0 +1,22 @@
+model_type: "gnn"
+description: "Feature config for LightGCN full retraining"
+
+feature_refs:
+  user:
+    - "user_embeddings:embedding"
+  movie:
+    - "movie_embeddings:embedding"
+
+base_data:
+  source: "s3"
+  interactions_path: "s3://recsys-moivelens/processed/feast-features/interactions/"
+  min_rating: 4.0
+  min_interactions: 5
+
+time_range:
+  start_date: null
+  end_date: null
+
+output:
+  format: "parquet"
+  path: "s3://recsys-moivelens/processed/training_data/gnn/"

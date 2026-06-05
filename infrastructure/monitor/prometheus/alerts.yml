@@ -1,0 +1,137 @@
+groups:
+  - name: recsys-serving
+    interval: 30s
+    rules:
+      - alert: ServingHighLatency
+        expr: histogram_quantile(0.95, rate(rec_latency_seconds_bucket[5m])) > 1.0
+        for: 5m
+        labels:
+          severity: warning
+          component: serving
+        annotations:
+          summary: "Serving API p95 latency cao"
+          description: "p95 latency = {{ $value | humanizeDuration }}, vu?t ngu?ng 1s (scenario={{ $labels.scenario }})"
+
+      - alert: ServingHighLatencyCritical
+        expr: histogram_quantile(0.95, rate(rec_latency_seconds_bucket[5m])) > 3.0
+        for: 2m
+        labels:
+          severity: critical
+          component: serving
+        annotations:
+          summary: "Serving API p95 latency critical"
+          description: "p95 latency = {{ $value | humanizeDuration }}, vu?t ngu?ng 3s"
+
+      - alert: ServingDown
+        expr: up{job="recsys-serving"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: serving
+        annotations:
+          summary: "Serving API down"
+          description: "Pod serving không scrape du?c metrics trong 1 phút"
+
+      - alert: LowCacheHitRate
+        expr: |
+          rate(cache_hit_total[10m])
+          /
+          (rate(cache_hit_total[10m]) + rate(cache_miss_total[10m]) + 0.001)
+          < 0.3
+        for: 10m
+        labels:
+          severity: warning
+          component: serving
+        annotations:
+          summary: "Cache hit rate th?p"
+          description: "Cache hit rate = {{ $value | humanizePercentage }}, du?i 30%"
+
+  - name: recsys-feast
+    interval: 30s
+    rules:
+      - alert: FeastHighLatency
+        expr: histogram_quantile(0.95, rate(feast_latency_seconds_bucket[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          component: feast
+        annotations:
+          summary: "Feast online lookup ch?m"
+          description: "p95 Feast latency = {{ $value | humanizeDuration }} (operation={{ $labels.operation }})"
+
+      - alert: FeastErrorRateHigh
+        expr: rate(feast_errors_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          component: feast
+        annotations:
+          summary: "Feast error rate cao"
+          description: "Feast errors = {{ $value | humanize }} req/s"
+
+  - name: recsys-model
+    interval: 30s
+    rules:
+      - alert: TritonHighLatency
+        expr: histogram_quantile(0.95, rate(model_inference_latency_seconds_bucket[5m])) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+          component: triton
+        annotations:
+          summary: "Triton inference ch?m"
+          description: "p95 Triton latency = {{ $value | humanizeDuration }}, vu?t ngu?ng 200ms"
+
+      - alert: TritonDown
+        expr: up{job="recsys-triton"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: triton
+        annotations:
+          summary: "Triton Inference Server down"
+          description: "Triton không scrape du?c metrics trong 2 phút"
+
+      - alert: EmbeddingsStale
+        expr: |
+          (time() - recsys_last_embedding_refresh_timestamp) > 172800
+        for: 0m
+        labels:
+          severity: warning
+          component: model
+        annotations:
+          summary: "Embeddings chua du?c refresh hon 48h"
+          description: "Last refresh cách dây {{ $value | humanizeDuration }}"
+
+  - name: recsys-infra
+    interval: 30s
+    rules:
+      - alert: ArgoWorkflowFailed
+        expr: argo_workflows_count{phase="Failed"} > 0
+        for: 0m
+        labels:
+          severity: warning
+          component: argo
+        annotations:
+          summary: "Argo workflow th?t b?i"
+          description: "Có {{ $value }} workflow dang ? tr?ng thái Failed"
+
+      - alert: KafkaLag
+        expr: kafka_consumer_group_lag > 10000
+        for: 10m
+        labels:
+          severity: warning
+          component: kafka
+        annotations:
+          summary: "Kafka consumer lag cao"
+          description: "Consumer group {{ $labels.group }} lag = {{ $value }}"
+
+      - alert: MLflowDown
+        expr: up{job="mlflow"} == 0
+        for: 3m
+        labels:
+          severity: warning
+          component: mlflow
+        annotations:
+          summary: "MLflow server down"
+          description: "MLflow không scrape du?c metrics trong 3 phút"

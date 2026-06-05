@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: milvus-minio
+  namespace: infra
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: milvus-minio
+  template:
+    metadata:
+      labels:
+        app: milvus-minio
+    spec:
+      containers:
+      - name: minio
+        image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+        ports:
+        - containerPort: 9001
+        - containerPort: 9000
+        env:
+        - name: MINIO_ACCESS_KEY
+          value: minioadmin
+        - name: MINIO_SECRET_KEY
+          value: minioadmin
+        command:
+        - minio
+        - server
+        - /minio_data
+        - --console-address
+        - ":9001"
+        volumeMounts:
+        - name: minio-storage
+          mountPath: /minio_data
+        livenessProbe:
+          exec:
+            command:
+            - curl
+            - -f
+            - http://localhost:9000/minio/health/live
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 20
+          failureThreshold: 3
+      volumes:
+      - name: minio-storage
+        persistentVolumeClaim:
+          claimName: milvus-minio-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: milvus-minio
+  namespace: infra
+spec:
+  selector:
+    app: milvus-minio
+  ports:
+  - name: api
+    port: 9000
+    targetPort: 9000
+  - name: console
+    port: 9001
+    targetPort: 9001
+  type: ClusterIP

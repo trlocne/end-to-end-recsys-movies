@@ -1,0 +1,28 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: train-reranker
+  namespace: argo
+spec:
+  template:
+    metadata:
+      labels:
+        app: train-reranker
+    spec:
+      containers:
+      - name: train-reranker
+        image: trlocne204/train-jobs:latest
+        command: ["python", "/app/train_reranker.py"]
+        env:
+        - name: MILVUS_HOST
+          value: milvus-standalone
+        - name: MILVUS_PORT
+          value: "19530"
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "2000m"
+          limits:
+            memory: "8Gi"
+            cpu: "8000m"
+      restartPolicy: OnFailure

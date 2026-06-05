@@ -1,0 +1,36 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --canvas: #fffefb;
+  --canvas-soft: #f8f4f0;
+  --ink: #201515;
+  --primary: #ff4f00;
+  --body: #605d52;
+}
+
+body {
+  @apply min-h-screen bg-canvas text-ink antialiased;
+}
+
+/* text-input: body-md 18px, border ink, rounded-input */
+.input-brand {
+  @apply w-full rounded-input border border-ink bg-canvas px-4 py-3 text-lg text-ink placeholder:text-bodyMid outline-none transition-shadow focus:ring-2 focus:ring-ink/20;
+}
+
+.btn-primary {
+  @apply rounded-brand bg-primary px-6 py-3 text-lg font-semibold text-onPrimary transition-opacity hover:opacity-90 disabled:opacity-50;
+}
+
+.btn-secondary {
+  @apply rounded-brand border border-ink bg-canvas px-6 py-3 text-lg font-semibold text-ink transition-colors hover:bg-canvasSoft;
+}
+
+.card-auth {
+  @apply rounded-brand bg-canvasSoft p-6 md:p-8;
+}
+
+.card-content {
+  @apply rounded-brand bg-canvasSoft p-6 text-lg text-ink;
+}

@@ -1,0 +1,39 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: convert-production-tensorrt
+  namespace: argo
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: default
+      containers:
+        - name: converter
+          image: trlocne204/convert-tensorrt:1.0.1
+          imagePullPolicy: Always
+          command: ["python", "/app/src/utils/convert_champion_to_tensorrt.py"]
+          args:
+            - --mlflow-uri
+            - http://mlflow.mlflow.svc.cluster.local:5000
+            - --model-name
+            - Recsys-ReRank
+            - --model-alias
+            - production
+            - --artifact-path
+            - reranker_model
+            - --output-dir
+            - /tmp/convert-output
+            - --release-pointer
+            - production
+            - --s3-base-prefix
+            - s3://recsys-moivelens/processed/production
+          env:
+            - name: AWS_REGION
+              value: us-east-1
+          # Optional: uncomment if you store AWS creds in secret.
+          # envFrom:
+          #   - secretRef:
+          #       name: aws-credentials

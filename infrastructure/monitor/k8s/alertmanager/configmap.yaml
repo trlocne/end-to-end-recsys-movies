@@ -1,0 +1,54 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: monitoring
+data:
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+
+    route:
+      group_by: [alertname, cluster, component]
+      group_wait: 10s
+      group_interval: 10s
+      repeat_interval: 12h
+      receiver: "null"   # tránh crash khi webhook chưa deploy
+      routes:
+        - match:
+            severity: critical
+          receiver: critical
+          continue: true
+        - match:
+            severity: warning
+          receiver: warning
+
+    receivers:
+      - name: "null"   # built-in Alertmanager receiver – không làm gì, không lỗi
+
+      - name: default
+        # TODO: thay bằng Slack/PagerDuty hoặc deploy webhook-receiver service
+        webhook_configs:
+          - url: http://webhook-receiver.monitoring.svc.cluster.local:8080/alerts
+            send_resolved: true
+
+      - name: critical
+        # Bật Slack khi có webhook: uncomment slack_configs bên dưới
+        # slack_configs:
+        #   - api_url: <SLACK_WEBHOOK_URL>
+        #     channel: "#recsys-alerts-critical"
+        webhook_configs:
+          - url: http://webhook-receiver.monitoring.svc.cluster.local:8080/critical
+            send_resolved: true
+
+      - name: warning
+        webhook_configs:
+          - url: http://webhook-receiver.monitoring.svc.cluster.local:8080/warning
+            send_resolved: true
+
+    inhibit_rules:
+      - source_match:
+          severity: critical
+        target_match:
+          severity: warning
+        equal: [alertname, cluster, component]

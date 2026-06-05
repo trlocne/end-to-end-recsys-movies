@@ -1,0 +1,100 @@
+# Default values for recsys-serving.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+
+image:
+  repository: my-docker-registry.com/recsys
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: "recsys-serving-sa"
+
+podAnnotations: {}
+
+podSecurityContext: {}
+  # fsGroup: 2000
+
+securityContext: {}
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+  # runAsUser: 1000
+
+# Serving Service Configuration
+serving:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: my-docker-registry.com/recsys/serving
+    tag: latest
+  service:
+    type: LoadBalancer
+    port: 80
+    targetPort: 8000
+  env:
+    userEmbS3: "s3://recsys-moivelens/processed/production/user_embeddings.parquet"
+    itemEmbS3: "s3://recsys-moivelens/processed/production/movie_embeddings.parquet"
+    rerankerS3: "s3://recsys-moivelens/processed/production/reranker.pt"
+    feastUrl: "http://feast-online-api.serving.svc.cluster.local:9980/get-online-features"
+    # parquet: load user/item embedding parquets (legacy). feast_only: use Feast online only (see docs/FEAST_OFFLINE_MATERIALIZE.md).
+    embeddingSource: "parquet"
+    gnnEmbedDim: "128"
+  # Optional: kubectl create secret generic ... --from-literal=DATABASE_URL='postgresql://...'
+  databaseUrlSecretName: ""
+  databaseUrlSecretKey: DATABASE_URL
+  milvus:
+    uri: "http://milvus.infra.svc.cluster.local:19530"
+    token: ""            # không cần token với Milvus standalone in-cluster
+    movieCollection: "movie_embeddings"
+    userCollection: "user_embeddings"
+  resources:
+    limits:
+      cpu: 1
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+
+# Shared infrastructure configuration
+infra:
+  awsCredsSecretName: "aws-creds"
+  awsAccessKeyKey: "access-key"
+  awsSecretKeyKey: "secret-key"
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # kubernetes.io/tls-acme: "true"
+  hosts:
+    - host: recsys.example.com
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+  tls: []
+  #  - secretName: chart-example-tls
+  #    hosts:
+  #      - chart-example.local
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

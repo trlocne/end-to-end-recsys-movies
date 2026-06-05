@@ -1,0 +1,56 @@
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: spot-standard
+spec:
+  template:
+    metadata: {}
+    spec:
+      expireAfter: 336h
+      nodeClassRef:
+        group: eks.amazonaws.com
+        kind: NodeClass
+        name: default
+
+      requirements:
+        # Spot only
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values:
+            - spot
+
+        # Instance families (mở rộng để tránh thiếu capacity)
+        - key: eks.amazonaws.com/instance-category
+          operator: In
+          values:
+            - c
+            - m
+            - r
+            - t
+
+        # Prefer larger spot nodes for Ray workers.
+        - key: eks.amazonaws.com/instance-size
+          operator: In
+          values:
+            - xlarge
+            - 2xlarge
+            - 4xlarge
+
+        # Keep spot workers on amd64 until training images are multi-arch.
+        - key: kubernetes.io/arch
+          operator: In
+          values:
+            - amd64
+
+        - key: kubernetes.io/os
+          operator: In
+          values:
+            - linux
+      terminationGracePeriod: 24h0m0s
+
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 5m
+
+    budgets:
+      - nodes: 10%

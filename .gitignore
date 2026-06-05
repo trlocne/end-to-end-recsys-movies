@@ -1,0 +1,153 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+.vscode-server
+.cursor/
+.cursor-server
+.lightning_studio/
+.codeium/
+.gemini/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# User-specific files
+.bashrc
+.bash_history
+.zshrc
+.vimrc
+.zsh_history
+.zcompdump
+.viminfo
+.python_history
+.psql_history
+.ssh/
+.git-credentials
+.sudo_as_admin_successful
+.wget-hsts
+
+# Cloud / local environment (do not commit)
+.aws/
+.kube/
+.vscode-server
+.windsurf/
+.windsurf-server
+.lightning_studio/
+.lightningignore
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Logs
+*.log
+logs/
+nohup.out
+
+# Data (keep structure, ignore contents)
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Models (large files)
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.trt
+*.engine
+models/*/
+
+# MLflow
+mlflow.db
+mlruns/
+
+# Ray
+ray_results/
+
+# Secrets
+*.pem
+*.key
+.env.local
+.env.*.local
+
+# Temp files
+tmp/
+*.tmp
+*.bak
+
+# Docker
+.dockerignore
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# Kubernetes secrets (decrypted)
+*-secret*.yaml
+*-secret*.yml
+!*-secret-encrypted.yaml
+
+# Build artifacts
+*.tar.gz
+*.zip
+
+# Large data files
+deployments/docker/volumes/
+src/data/movielens_20m/ratings_fukk.csv
+src/data/movielens_20m/ratings.csv
+src/data/
+
+# Kubeconfig with real tokens
+deployments/k8s/account/seanmovies-kubeconfig.yaml
+
+# Secret files — never commit real credentials
+feature_store.yaml
+**/feature_store.yaml
+
+# Codeboarding snapshots
+.codeboarding/
+
+# Claude memory
+.claude/
+
+# Helm local overrides (copy from values.override.example.yaml)
+deployments/helm/recsys-app/values.override.yaml

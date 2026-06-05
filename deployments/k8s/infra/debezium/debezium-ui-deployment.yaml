@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: debezium-ui
+  namespace: infra
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: debezium-ui
+  template:
+    metadata:
+      labels:
+        app: debezium-ui
+    spec:
+      containers:
+      - name: debezium-ui
+        image: debezium/debezium-ui:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: KAFKA_CONNECT_URIS
+          value: http://kafka-connect:8083
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: debezium-ui
+  namespace: infra
+spec:
+  selector:
+    app: debezium-ui
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+  type: ClusterIP

@@ -1,0 +1,9 @@
+torch==2.1.0 --index-url https://download.pytorch.org/whl/cpu
+numpy<2.0.0
+boto3==1.28.0
+feast[aws,redis]==0.34.1
+s3fs==2024.3.1
+scikit-learn
+pandas
+mlflow
+pyarrow

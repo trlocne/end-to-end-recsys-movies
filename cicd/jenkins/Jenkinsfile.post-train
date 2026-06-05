@@ -1,0 +1,387 @@
+pipeline {
+  agent any
+
+  parameters {
+    string(name: 'MLFLOW_URI', defaultValue: 'https://mlflow.livelydesert-3ccc6a0e.centralindia.azurecontainerapps.io/', description: 'MLflow tracking URI')
+    string(name: 'MODEL_NAME', defaultValue: 'Recsys-ReRank', description: 'Reranker registered model name')
+    string(name: 'GNN_MODEL_NAME', defaultValue: 'Recsys-GNN', description: 'GNN registered model name')
+    string(name: 'MODEL_ALIAS', defaultValue: 'champion', description: 'Candidate alias (validate + promote from)')
+    string(name: 'PRODUCTION_ALIAS', defaultValue: 'production', description: 'Production alias')
+    string(name: 'SYNC_TAG_KEYS', defaultValue: '', description: 'Optional. Empty = validate_release defaults (hard: dataset_version,feature_schema_version; warn: pipeline_run_id). Non-empty CSV = legacy: all keys hard-required.')
+    choice(name: 'GATE_STATUS', choices: ['APPROVED', 'REJECTED'], description: 'Webhook gate (must be APPROVED)')
+    string(name: 'APPROVER', defaultValue: 'admin', description: 'input() submitter')
+    string(name: 'APPROVAL_TIMEOUT_MINUTES', defaultValue: '30', description: 'Manual approval timeout (minutes)')
+    string(name: 'S3_BASE_PREFIX', defaultValue: 's3://recsys-moivelens/processed/production', description: 'S3 prefix for ONNX / serving')
+    string(name: 'CORRELATION_ID', defaultValue: '', description: 'Trace id; empty → jenkins-post-train-$BUILD_NUMBER')
+    booleanParam(name: 'RUN_SERVING_UPDATE', defaultValue: true, description: 'Run Argo serving-update (Milvus/ES/serving_config on S3); workflow step10 triggers ArgoCD restart for serving')
+    string(name: 'SERVING_UPDATE_WAIT_MINUTES', defaultValue: '90', description: 'Timeout for argo submit --wait (serving-update DAG); tăng nếu DAG hay vượt quá')
+  }
+
+  environment {
+    PYTHONUNBUFFERED = '1'
+    CORRELATION_ID = "${params.CORRELATION_ID?.trim() ?: ('jenkins-post-train-' + env.BUILD_NUMBER)}"
+  }
+
+  stages {
+
+    stage('Checkout') {
+      steps {
+        git (
+          url: 'https://github.com/trlocne/end-to-end-recommendation-system.git',
+          branch: 'main',
+          credentialsId: 'github-token'
+        )
+
+        sh '''
+          set -e
+          test -f scripts/validate_release.py
+          test -f scripts/promote_models.py
+          test -f cicd/argo/workflow/serving-update-workflow.yaml
+          echo "[INFO] scripts and Argo workflow manifest verified"
+        '''
+      }
+    }
+
+    stage('Validate Gate') {
+      steps {
+        script {
+          if (params.GATE_STATUS != 'APPROVED') {
+            error("Gate rejected: ${params.GATE_STATUS}")
+          }
+
+          echo '[INFO] Gate approved.'
+        }
+      }
+    }
+
+    stage('Validate Release Compatibility') {
+      steps {
+        script {
+          sh 'rm -f .needs_manual_approval'
+
+          sh(
+            script: """
+              set -e
+              export MLFLOW_TRACKING_URI='${params.MLFLOW_URI}'
+              export MODEL_NAME='${params.MODEL_NAME}'
+              export GNN_MODEL_NAME='${params.GNN_MODEL_NAME}'
+              export MODEL_ALIAS='${params.MODEL_ALIAS}'
+              export PRODUCTION_ALIAS='${params.PRODUCTION_ALIAS}'
+              export SYNC_TAG_KEYS='${params.SYNC_TAG_KEYS}'
+              export CORRELATION_ID='${env.CORRELATION_ID}'
+              python3 scripts/validate_release.py > validate_result.json
+            """
+          )
+
+          def result = readJSON file: 'validate_result.json'
+          echo "[validate_release] state=${result['release_state']} require_approval=${result['require_approval']} has_mismatch=${result['has_mismatch']} rerank=v${result['rerank_champion']} gnn=v${result['gnn_champion']}"
+          if (result['warnings'] != null && !result['warnings'].isEmpty()) {
+            echo "[validate_release] warnings=${result['warnings']}"
+          }
+
+          sh 'mv -f validate_result.json release_info.json'
+
+          def reqApr = result['require_approval']
+          def rs = result['release_state']
+          env.RELEASE_STATE = (rs == null || rs.toString() == 'null') ? '' : rs.toString()
+          env.REQUIRE_APPROVAL = (reqApr == true || reqApr?.toString()?.equalsIgnoreCase('true')) ? 'true' : 'false'
+          def hm = result['has_mismatch']
+          env.HAS_MISMATCH = (hm == true || hm?.toString()?.equalsIgnoreCase('true')) ? 'true' : 'false'
+          env.RERANK_CHAMPION = result['rerank_champion'] != null ? result['rerank_champion'].toString() : ''
+          env.GNN_CHAMPION = result['gnn_champion'] != null ? result['gnn_champion'].toString() : ''
+          env.RERANK_PROD = result['rerank_prod'] != null ? result['rerank_prod'].toString() : ''
+          env.GNN_PROD = result['gnn_prod'] != null ? result['gnn_prod'].toString() : ''
+
+          /* fileExists in `when` is reliable on K8s agents; env.REQUIRE_APPROVAL in `when` often evaluates false incorrectly */
+          if (env.REQUIRE_APPROVAL == 'true') {
+            writeFile file: '.needs_manual_approval', text: '1'
+            echo '[INFO] Manual approval required — marker .needs_manual_approval written'
+          }
+        }
+      }
+    }
+
+    stage('Manual Approval') {
+
+      when {
+        allOf {
+          expression { return fileExists('release_info.json') }
+          expression { return fileExists('.needs_manual_approval') }
+        }
+      }
+
+      steps {
+        script {
+          def info = readJSON file: 'release_info.json'
+          def isBlocked = info['has_mismatch'] == true
+
+          timeout(
+            time: params.APPROVAL_TIMEOUT_MINUTES as Integer,
+            unit: 'MINUTES'
+          ) {
+
+            input(
+              message: isBlocked ?
+"""
+Compatibility mismatch detected
+
+RERANKER:
+- champion=v${info['rerank_champion']}
+- production=v${info['rerank_prod'] ?: 'none'}
+
+GNN:
+- champion=v${info['gnn_champion']}
+- production=v${info['gnn_prod'] ?: 'none'}
+
+Force deploy anyway?
+"""
+:
+"""
+Approve partial deployment?
+
+RERANKER:
+- champion=v${info['rerank_champion']}
+- production=v${info['rerank_prod'] ?: 'none'}
+
+GNN:
+- champion=v${info['gnn_champion']}
+- production=v${info['gnn_prod'] ?: 'none'}
+""",
+
+              ok: isBlocked
+                ? 'Force Deploy'
+                : 'Approve',
+
+              submitter: params.APPROVER
+            )
+          }
+
+          info['release_state'] = 'APPROVED_OVERRIDE'
+          writeJSON file: 'release_info.json', json: info, pretty: 2
+
+          env.RELEASE_STATE = 'APPROVED_OVERRIDE'
+
+          sh 'rm -f .needs_manual_approval'
+
+          echo '[INFO] Deployment approved manually.'
+        }
+      }
+    }
+
+    stage('Promote Production Aliases') {
+
+      when {
+        expression {
+          return env.RELEASE_STATE == 'READY_TO_PROMOTE' ||
+                 env.RELEASE_STATE == 'APPROVED_OVERRIDE'
+        }
+      }
+
+      steps {
+        sh '''
+          set -euo pipefail
+
+          export MLFLOW_TRACKING_URI="${MLFLOW_URI}"
+          export CORRELATION_ID="${CORRELATION_ID}"
+
+          python3 scripts/promote_models.py
+        '''
+      }
+    }
+
+    stage('Export ONNX') {
+
+      when {
+        expression {
+          return env.RELEASE_STATE == 'READY_TO_PROMOTE' ||
+                 env.RELEASE_STATE == 'APPROVED_OVERRIDE'
+        }
+      }
+
+      steps {
+        script {
+          def rerankerVersion = env.RERANK_CHAMPION
+          def onnxPath = "${params.S3_BASE_PREFIX}/${params.MODEL_NAME}/v${rerankerVersion}/reranker.onnx"
+          echo "[INFO] ONNX path (expected after export): ${onnxPath}"
+          writeFile file: 'onnx_path.txt', text: onnxPath
+        }
+        podTemplate(
+          label: 'onnx-export',
+          containers: [
+            containerTemplate(
+              name: 'onnx-export',
+              image: 'trlocne204/onnx-export:v1.3',
+              alwaysPullImage: true,
+              command: 'cat',
+              ttyEnabled: true,
+              envVars: [
+                envVar(key: 'MLFLOW_TRACKING_URI', value: "${MLFLOW_URI}"),
+                envVar(key: 'MODEL_NAME', value: "${MODEL_NAME}"),
+                envVar(key: 'PRODUCTION_ALIAS', value: "${PRODUCTION_ALIAS}"),
+                envVar(key: 'S3_BASE_PREFIX', value: "${S3_BASE_PREFIX}"),
+
+                secretEnvVar(
+                  key: 'AWS_ACCESS_KEY_ID',
+                  secretName: 'aws-creds',
+                  secretKey: 'AWS_ACCESS_KEY_ID'
+                ),
+
+                secretEnvVar(
+                  key: 'AWS_SECRET_ACCESS_KEY',
+                  secretName: 'aws-creds',
+                  secretKey: 'AWS_SECRET_ACCESS_KEY'
+                ),
+
+                secretEnvVar(
+                  key: 'AWS_DEFAULT_REGION',
+                  secretName: 'aws-creds',
+                  secretKey: 'AWS_DEFAULT_REGION'
+                )
+              ]
+            )
+          ]
+        ) {
+
+          node('onnx-export') {
+
+            container('onnx-export') {
+
+              sh '''
+                set -e
+
+                python3 /app/onnx_export.py
+              '''
+            }
+          }
+        }
+      }
+    }
+
+    stage('Run serving-update (Argo)') {
+
+      when {
+        allOf {
+          expression { return params.RUN_SERVING_UPDATE }
+          expression {
+            return env.RELEASE_STATE == 'READY_TO_PROMOTE' ||
+                   env.RELEASE_STATE == 'APPROVED_OVERRIDE'
+          }
+        }
+      }
+
+      steps {
+        script {
+          timeout(time: params.SERVING_UPDATE_WAIT_MINUTES as Integer, unit: 'MINUTES') {
+            /* Same agent as Checkout / kubectl: workspace already has repo (no separate K8s pod). */
+            withEnv([
+              "MLFLOW_URI=${params.MLFLOW_URI}",
+              "GNN_MODEL_NAME=${params.GNN_MODEL_NAME}",
+              "MODEL_NAME=${params.MODEL_NAME}",
+              "PRODUCTION_ALIAS=${params.PRODUCTION_ALIAS}",
+              "S3_BASE_PREFIX=${params.S3_BASE_PREFIX}",
+              "CORRELATION_ID=${env.CORRELATION_ID}",
+              "GNN_MODEL_VERSION_OVERRIDE=${env.GNN_CHAMPION ?: ''}",
+              "RERANKER_MODEL_VERSION_OVERRIDE=${env.RERANK_CHAMPION ?: ''}",
+              'ARGO_NAMESPACE=argo',
+            ]) {
+
+              sh '''
+                set -euo pipefail
+                cd "${WORKSPACE}"
+
+                mkdir -p "${HOME}/bin"
+                if ! command -v argo >/dev/null 2>&1; then
+                  ARGO_VER="${ARGO_CLI_VERSION:-v3.5.12}"
+                  curl -fsSL "https://github.com/argoproj/argo-workflows/releases/download/${ARGO_VER}/argo-linux-amd64.gz" \
+                    | gunzip > "${HOME}/bin/argo"
+                  chmod +x "${HOME}/bin/argo"
+                fi
+                export PATH="${HOME}/bin:${PATH}"
+                argo version --short || true
+
+                : "${MLFLOW_URI:?}"
+                : "${GNN_MODEL_NAME:?}"
+                : "${MODEL_NAME:?}"
+                : "${PRODUCTION_ALIAS:?}"
+                : "${S3_BASE_PREFIX:?}"
+                SERVING_CFG="${SERVING_CONFIG_PATH:-${S3_BASE_PREFIX}/serving_config.yaml}"
+                REGISTRY="${REGISTRY:-trlocne204}"
+                GPU_TRITON="${USE_GPU_TRITON:-false}"
+                INCR_USERS="${INCREMENTAL_USERS_ONLY:-true}"
+                GNN_VO="${GNN_MODEL_VERSION_OVERRIDE:-}"
+                RR_VO="${RERANKER_MODEL_VERSION_OVERRIDE:-}"
+                CORR="${CORRELATION_ID:-}"
+                NS="${ARGO_NAMESPACE:-argo}"
+
+                LABEL_ARGS=
+                if [ -n "${CORR}" ]; then
+                  SAFE_CORR=$(printf '%s' "${CORR}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._-]/-/g' | cut -c1-63)
+                  LABEL_ARGS="-l correlation-id=${SAFE_CORR}"
+                fi
+
+                # Use cluster WorkflowTemplate so -p parameters match (wrapper Workflow YAML omitted registry/mlflow/etc.).
+                echo "[INFO] argo submit --from workflowtemplate/serving-update -n ${NS} --wait ... (correlation=${CORR:-none})"
+                argo submit -n "${NS}" \
+                  --from "workflowtemplate/serving-update" \
+                  --wait \
+                  ${LABEL_ARGS} \
+                  -p "registry=${REGISTRY}" \
+                  -p "mlflow-tracking-uri=${MLFLOW_URI}" \
+                  -p "gnn-model-name=${GNN_MODEL_NAME}" \
+                  -p "gnn-model-alias=${PRODUCTION_ALIAS}" \
+                  -p "reranker-model-name=${MODEL_NAME}" \
+                  -p "s3-base-path=${S3_BASE_PREFIX}" \
+                  -p "serving-config-path=${SERVING_CFG}" \
+                  -p "gnn-model-version-override=${GNN_VO}" \
+                  -p "reranker-model-version-override=${RR_VO}" \
+                  -p "correlation-id=${CORR}" \
+                  -p "use-gpu-triton=${GPU_TRITON}" \
+                  -p "incremental-users-only=${INCR_USERS}"
+              '''
+            }
+          }
+        }
+      }
+    }
+
+  }
+
+  post {
+
+    success {
+      script {
+        def st = env.RELEASE_STATE
+        if (!st?.trim()) {
+          try {
+            def info = readJSON file: 'release_info.json'
+            st = info['release_state']?.toString() ?: '(unset)'
+          } catch (ignored) {
+            st = '(no release_info.json)'
+          }
+        }
+        echo """
+================================================
+[SUCCESS] Pipeline completed
+Release state: ${st}
+================================================
+"""
+      }
+    }
+
+    aborted {
+      echo """
+================================================
+[ABORTED] Deployment cancelled
+================================================
+"""
+    }
+
+    failure {
+      echo """
+================================================
+[FAILED] Pipeline failed
+================================================
+"""
+    }
+  }
+}

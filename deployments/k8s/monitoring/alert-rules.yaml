@@ -53,7 +53,6 @@ spec:
           annotations:
             summary: "Pod {{ $labels.pod }} restarted {{ $value | printf \"%.0f\" }} times in 15m"
 
-    # ── Triton ─────────────────────────────────────────────────────────
     - name: triton
       rules:
         - alert: TritonPodDown
@@ -88,7 +87,6 @@ spec:
           annotations:
             summary: "Triton model {{ $labels.model }} failing > 0.1 req/s"
 
-    # ── MLflow ─────────────────────────────────────────────────────────
     - name: mlflow
       rules:
         - alert: MLflowDown
@@ -111,7 +109,6 @@ spec:
           annotations:
             summary: "MLflow Postgres is down"
 
-    # ── Data Pipeline ──────────────────────────────────────────────────
     - name: data-pipeline
       rules:
         - alert: KafkaConsumerLagHigh
@@ -145,7 +142,6 @@ spec:
           annotations:
             summary: "Debezium connector {{ $labels.connector }} is not RUNNING"
 
-    # ── Infrastructure ─────────────────────────────────────────────────
     - name: infrastructure
       rules:
         - alert: NodeHighCPU
@@ -186,7 +182,6 @@ spec:
           annotations:
             summary: "Pod {{ $labels.pod }} in {{ $labels.namespace }} is crash looping ({{ $value | printf \"%.0f\" }} restarts in 15m)"
 
-    # ── Argo Workflows ─────────────────────────────────────────────────
     - name: argo-workflows
       rules:
         - alert: ArgoWorkflowFailed

@@ -1,0 +1,12 @@
+FROM pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
+
+WORKDIR /app
+
+# Install TensorRT dependencies
+RUN pip install --no-cache-dir tensorrt
+
+COPY src/ /app/src/
+
+ENV PYTHONPATH=/app
+
+ENTRYPOINT ["python", "/app/src/utils/convert_to_tensorrt.py"]

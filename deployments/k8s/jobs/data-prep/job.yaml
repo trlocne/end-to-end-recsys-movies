@@ -1,0 +1,25 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: data-prep
+  namespace: argo
+spec:
+  template:
+    metadata:
+      labels:
+        app: data-prep
+    spec:
+      containers:
+      - name: data-prep
+        image: trlocne204/data-prep:latest
+        env:
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: kafka-broker:29092
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+      restartPolicy: OnFailure

@@ -1,0 +1,84 @@
+# Cluster Namespaces — apply once before everything else
+#   kubectl apply -f deployments/k8s/namespaces/namespaces.yaml
+#
+# Namespace map:
+#   argo        — Argo Workflows controller + KubeRay operator
+#   argocd      — ArgoCD GitOps controller
+#   serving     — FastAPI serving, Triton inference, recsys-ui
+#   jenkins     — Jenkins CI/CD controller + agents
+#   mlflow      — MLflow tracking server + Postgres backend
+#   infra       — Kafka Connect/Debezium, Elasticsearch, Flink, Milvus
+#   kafka       — Strimzi Kafka cluster
+#   monitoring  — Prometheus, Grafana, Loki, Alertmanager
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: argo
+  labels:
+    app.kubernetes.io/part-of: recsys
+    team: platform
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: argocd
+  labels:
+    app.kubernetes.io/part-of: recsys
+    team: platform
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: serving
+  labels:
+    app.kubernetes.io/part-of: recsys
+    team: ml-serving
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jenkins
+  labels:
+    app.kubernetes.io/part-of: recsys
+    team: platform
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mlflow
+  labels:
+    app.kubernetes.io/part-of: recsys
+    team: ml-platform
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: infra
+  labels:
+    app.kubernetes.io/part-of: recsys
+    team: data-infra
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kafka
+  labels:
+    app.kubernetes.io/part-of: recsys
+    team: data-infra
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    app.kubernetes.io/part-of: recsys
+    team: platform

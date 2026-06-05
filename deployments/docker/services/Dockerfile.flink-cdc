@@ -1,0 +1,71 @@
+FROM flink:1.20.1-scala_2.12-java17
+
+# Switch to root for package installation
+USER root
+
+# Install python
+RUN set -ex; \
+  apt-get update; \
+  apt-get -y install software-properties-common; \
+  add-apt-repository ppa:deadsnakes/ppa; \
+  apt-get update; \
+  apt-get -y install python3.11 python3.11-dev python3.11-venv; \
+  ln -s /usr/bin/python3.11 /usr/bin/python; \
+  python3.11 -m ensurepip --upgrade
+
+# Install pyflink
+RUN set -ex; \
+  apt-get update; \
+  apt-get -y remove python3-jwt; \
+  apt-get -y install libffi-dev; \
+  python -m pip install --upgrade pip; \
+  pip install cffi; \
+  pip install "apache-flink==1.20.1" "apache-flink-libraries==1.20.1" "apache-beam==2.48.0"
+
+ARG FLINK_VERSION=1.20.1
+
+# FLINK FORMATS
+RUN wget -P /opt/flink/lib/ https://repo1.maven.org/maven2/org/apache/flink/flink-avro-confluent-registry/1.20.1/flink-avro-confluent-registry-1.20.1.jar
+RUN wget -P /opt/flink/lib/ https://repo1.maven.org/maven2/org/apache/flink/flink-csv/1.20.1/flink-csv-1.20.1.jar
+RUN wget -P /opt/flink/lib/ https://repo1.maven.org/maven2/org/apache/flink/flink-json/1.20.1/flink-json-1.20.1.jar
+
+# FLINK CONNECTORS
+RUN wget -P /opt/flink/lib/ https://repo1.maven.org/maven2/org/apache/flink/flink-sql-connector-kafka/3.3.0-1.20/flink-sql-connector-kafka-3.3.0-1.20.jar
+RUN wget -P /opt/flink/lib/ https://repo1.maven.org/maven2/org/apache/flink/flink-connector-jdbc/3.1.1-1.17/flink-connector-jdbc-3.1.1-1.17.jar
+
+RUN mkdir -p /opt/flink/plugins/s3-fs-hadoop && \
+    wget -q -P /opt/flink/plugins/s3-fs-hadoop/ \
+    https://repo1.maven.org/maven2/org/apache/flink/flink-s3-fs-hadoop/1.20.1/flink-s3-fs-hadoop-1.20.1.jar
+
+# OTHER JARS
+RUN wget -P /opt/flink/lib/ https://jdbc.postgresql.org/download/postgresql-42.7.1.jar
+
+# Create data folders
+RUN mkdir -p /opt/data; \
+    mkdir -p /opt/data/stream;
+
+# Copy application files
+COPY src/feature_repo /app/src/feature_repo
+COPY src/feature_stores /app/src/feature_stores
+
+# Create usrlib directory and copy Kafka connector for PyFlink
+RUN mkdir -p /opt/flink/usrlib && \
+    cp /opt/flink/lib/flink-sql-connector-kafka-3.3.0-1.20.jar /opt/flink/usrlib/
+
+COPY src/feature_stores/flink_ingest.py /opt/flink/usrlib/
+COPY src/feature_stores/transforms.py /opt/flink/usrlib/
+COPY src/feature_stores/config.py /opt/flink/usrlib/
+COPY src/feature_stores/avro_deserializer.py /opt/flink/usrlib/
+
+WORKDIR /opt/flink
+RUN apt update && apt install python3-psycopg2 -yq
+RUN pip install kafka-python sqlalchemy scikit-learn confluent-kafka httpx authlib cachetools attrs "feast[aws,redis]==0.61.0" redis boto3 s3fs pyarrow
+
+ENV PYTHONPATH=/app:/opt/flink/usrlib
+ENV FEAST_REPO_PATH=/app/src/feature_repo
+ENV S3_OFFLINE_BASE=s3://recsys-moivelens/processed/feast-features
+ENV PYFLINK_PYTHON=/usr/bin/python3.11
+
+RUN sed -i '45s/.*/if [ -w "\$CONFIG_FILE" ]; then\n    echo "\$KEY: \$VALUE" >> "\$CONFIG_FILE"\n  else\n    echo "Warning: Config file is read-only, skipping write for \$KEY"\n  fi/' /opt/flink/bin/config-parser-utils.sh
+
+EXPOSE 6123 8081 8088

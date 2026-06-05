@@ -1,0 +1,19 @@
+# Overlay example: copy to `values.override.yaml` (gitignored), edit secrets, then:
+#   make install-app VALUES='-f apps/recsys-serving/values.yaml -f apps/recsys-serving/values.override.yaml'
+
+serving:
+  image:
+    repository: trlocne204/serving
+    tag: latest
+  env:
+    userEmbS3: "s3://your-bucket/embeddings/user_embeddings.parquet"
+    itemEmbS3: "s3://your-bucket/embeddings/movie_embeddings.parquet"
+    rerankerS3: "s3://your-bucket/models/reranker.pt"
+  milvus:
+    uri: "https://your-zilliz-endpoint"
+    token: "REPLACE_ME"
+    movieCollection: "movie_embeddings"
+    userCollection: "user_embeddings"
+
+infra:
+  awsCredsSecretName: "aws-creds"

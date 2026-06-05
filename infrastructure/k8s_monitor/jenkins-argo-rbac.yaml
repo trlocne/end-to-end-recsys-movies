@@ -1,0 +1,23 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jenkins-argo-workflow-creator
+  namespace: argo
+rules:
+- apiGroups: ["argoproj.io"]
+  resources: ["workflows"]
+  verbs: ["create", "get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-argo-workflow-binding
+  namespace: argo
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: jenkins
+roleRef:
+  kind: Role
+  name: jenkins-argo-workflow-creator
+  apiGroup: rbac.authorization.k8s.io

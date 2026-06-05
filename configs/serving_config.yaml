@@ -1,0 +1,47 @@
+# Source of truth for serving infrastructure state.
+# Stored at: s3://recsys-moivelens/processed/production/serving_config.yaml
+# This file in the repo is the template/default — workflows always read/write the S3 copy.
+
+# ── Model metadata — updated by serving-update-workflow (post Jenkins promotion)
+models:
+  bundle_version: "1"
+  gnn_run_id: "test-run-id-gnn"
+  reranker_run_id: "test-run-id-reranker"
+  gnn_embed_dim: 64          # From MLflow params
+  gnn_num_layers: 3           # From MLflow params
+
+# ── Embeddings — updated by BOTH serving-update-workflow and cron
+embeddings:
+  base_path: "s3://recsys-moivelens/processed/production/embeddings/lightgcn"
+  current_snapshot_id: null       # snapshot ID from incremental_embedding_refresh
+  last_refresh_time: null         # ISO8601 UTC timestamp of last embedding update
+  user_emb: null                  # full S3 path → user_embeddings.parquet
+  item_emb: null                  # full S3 path → movie_embeddings.parquet
+
+training_lineage:
+  feature_file: null              # S3 path to features.pt used when training GNN
+  data_prep_path: null            # S3 dir with train_df, users_map, etc.
+
+retrieval:
+  top_k_candidates: 500
+  top_k_final: 20
+  diversity_lambda: 0.5
+
+reranker:
+  embed_dim: 64
+  dropout: 0.3
+
+inference:
+  host: "0.0.0.0"
+  port: 8000
+  feast_http_url: "http://54.179.181.24:9980/get-online-features"
+
+elasticsearch:
+  uri: "http://elasticsearch.infra.svc.cluster.local:9200"
+  api_key: ""          # không cần auth với ES in-cluster
+  index: "recsys-movies"
+
+milvus:
+  uri: "http://milvus.infra.svc.cluster.local:19530"
+  token: ""            # không cần token với Milvus standalone in-cluster
+  collection: "movie_embeddings"

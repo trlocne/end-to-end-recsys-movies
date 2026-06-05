@@ -1,0 +1,121 @@
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: "recsys"
+    environment: "production"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  # Prometheus t? scrape
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]
+
+  # Loki metrics
+  - job_name: loki
+    static_configs:
+      - targets: [loki.monitoring.svc.cluster.local:3100]
+
+  # Serving API (FastAPI /metrics) � namespace: serving
+  - job_name: recsys-serving
+    metrics_path: /metrics
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [serving]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        action: keep
+        regex: serving
+      - source_labels: [__meta_kubernetes_pod_ip]
+        target_label: __address__
+        replacement: $1:8000
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace
+
+  # Triton Inference Server metrics � namespace: serving
+  - job_name: recsys-triton
+    metrics_path: /metrics
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [serving]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        action: keep
+        regex: triton
+      - source_labels: [__meta_kubernetes_pod_ip]
+        target_label: __address__
+        replacement: $1:8002
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+
+  # MLflow \xe2\x80\x93 namespace: mlflow
+  - job_name: mlflow
+    metrics_path: /metrics
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [mlflow]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        action: keep
+        regex: mlflow
+      - source_labels: [__meta_kubernetes_pod_ip]
+        target_label: __address__
+        replacement: $1:5000
+
+  # Argo Workflows metrics � namespace: argo
+  - job_name: argo-workflows
+    metrics_path: /metrics
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [argo]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        action: keep
+        regex: argo-server
+      - source_labels: [__meta_kubernetes_pod_ip]
+        target_label: __address__
+        replacement: $1:9090
+
+  # Kafka � namespace: kafka
+  - job_name: kafka
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [kafka]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        action: keep
+        regex: kafka
+      - source_labels: [__meta_kubernetes_pod_ip]
+        target_label: __address__
+        replacement: $1:9404
+
+  # Node Exporter – CPU, RAM, disk metrics từ mỗi node (DaemonSet ns:monitoring)
+  - job_name: node-exporter
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [monitoring]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        action: keep
+        regex: node-exporter
+      - source_labels: [__meta_kubernetes_pod_ip]
+        target_label: __address__
+        replacement: $1:9100

@@ -1,0 +1,792 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: serving-update-cron
+  namespace: argo
+spec:
+  entrypoint: serving-update-dag
+  serviceAccountName: argo-workflow-sa
+  podGC:
+    strategy: OnWorkflowCompletion
+    deleteDelayDuration: "3600s"
+  ttlStrategy:
+    secondsAfterSuccess: 604800
+    secondsAfterFailure: 1209600
+  arguments:
+    parameters:
+    - name: registry
+      value: "trlocne204"
+    - name: mlflow-tracking-uri
+      value: "http://mlflow.mlflow.svc.cluster.local:5000"
+    - name: gnn-model-name
+      value: "Recsys-GNN"
+    - name: gnn-model-alias
+      value: "production"
+    - name: reranker-model-name
+      value: "Recsys-ReRank"
+    - name: milvus-uri
+      value: "http://milvus.infra.svc.cluster.local:19530"
+    - name: milvus-token
+      value: ""
+    - name: es-uri
+      value: "http://elasticsearch.infra.svc.cluster.local:9200"
+    - name: es-api-key
+      value: ""
+    - name: embeddings-base-path
+      value: "s3://recsys-moivelens/processed/production/embeddings/lightgcn"
+    - name: incremental-learning-rate
+      value: "1e-4"
+    - name: incremental-time-window
+      value: "2"
+    - name: incremental-epochs
+      value: "2"
+    - name: s3-base-path
+      value: "s3://recsys-moivelens/processed/production"
+    - name: collection-retention-days
+      value: "7"
+    - name: milvus-max-collections
+      value: "5"
+    - name: incremental-users-only
+      value: "true"
+    - name: gnn-model-version-override
+      value: ""
+    - name: reranker-model-version-override
+      value: ""
+    - name: serving-config-path
+      value: "s3://recsys-moivelens/processed/production/serving_config.yaml"
+    - name: correlation-id
+      value: "cron-serving-update"
+    - name: serving-namespace
+      value: "serving"
+    - name: serving-deployment
+      value: "serving"
+
+  templates:
+  - name: serving-update-dag
+    dag:
+      tasks:
+      - name: step0-incremental-feature-extraction
+        template: incremental-feature-extraction
+        arguments:
+          parameters:
+          - name: config-path
+            value: "s3://recsys-moivelens/processed/production/incremental_config.yaml"
+          - name: delta-output-path
+            value: "{{workflow.parameters.s3-base-path}}/incremental/features_delta.pt"
+
+      - name: step0b-feast-materialization
+        template: feast-materialization
+        arguments:
+          parameters:
+          - name: config-path
+            value: "s3://recsys-moivelens/processed/production/incremental_config.yaml"
+        dependencies: [step0-incremental-feature-extraction]
+
+      - name: step0c-incremental-embedding-refresh
+        template: incremental-embedding-refresh
+        arguments:
+          parameters:
+          - name: interactions-path
+            value: "{{workflow.parameters.s3-base-path}}/interactions/"
+          - name: embeddings-base-path
+            value: "{{workflow.parameters.embeddings-base-path}}"
+          - name: learning-rate
+            value: "{{workflow.parameters.incremental-learning-rate}}"
+          - name: epochs
+            value: "{{workflow.parameters.incremental-epochs}}"
+          - name: time-window
+            value: "{{workflow.parameters.incremental-time-window}}"
+        dependencies: [step0b-feast-materialization]
+
+      - name: step1-fetch-model-info
+        dependencies: [step0c-incremental-embedding-refresh]
+        template: fetch-model-info
+        arguments:
+          parameters:
+          - name: mlflow-tracking-uri
+            value: "{{workflow.parameters.mlflow-tracking-uri}}"
+          - name: gnn-model-name
+            value: "{{workflow.parameters.gnn-model-name}}"
+          - name: gnn-model-alias
+            value: "{{workflow.parameters.gnn-model-alias}}"
+          - name: gnn-model-version-override
+            value: "{{workflow.parameters.gnn-model-version-override}}"
+
+      - name: step3-create-new-collections
+        template: create-milvus-collections
+        dependencies: [step2c-precleanup-collections, step0c-incremental-embedding-refresh]
+        arguments:
+          parameters:
+          - name: milvus-uri
+            value: "{{workflow.parameters.milvus-uri}}"
+          - name: milvus-token
+            value: "{{workflow.parameters.milvus-token}}"
+          - name: embeddings-path
+            value: "{{tasks.step0c-incremental-embedding-refresh.outputs.parameters.embeddings-path}}"
+          - name: timestamp
+            value: "{{workflow.parameters.s3-base-path}}/{{workflow.name}}"
+
+      - name: step2c-precleanup-collections
+        template: cleanup-collections-before-create
+        dependencies: [step1-fetch-model-info]
+        arguments:
+          parameters:
+          - name: milvus-uri
+            value: "{{workflow.parameters.milvus-uri}}"
+          - name: milvus-token
+            value: "{{workflow.parameters.milvus-token}}"
+          - name: max-collections
+            value: "{{workflow.parameters.milvus-max-collections}}"
+
+      - name: step4-index-embeddings
+        template: index-embeddings
+        dependencies: [step3-create-new-collections, step0c-incremental-embedding-refresh]
+        arguments:
+          parameters:
+          - name: milvus-uri
+            value: "{{workflow.parameters.milvus-uri}}"
+          - name: milvus-token
+            value: "{{workflow.parameters.milvus-token}}"
+          - name: embeddings-path
+            value: "{{tasks.step0c-incremental-embedding-refresh.outputs.parameters.embeddings-path}}"
+          - name: movie-collection
+            value: "{{tasks.step3-create-new-collections.outputs.parameters.movie-collection}}"
+          - name: user-collection
+            value: "{{tasks.step3-create-new-collections.outputs.parameters.user-collection}}"
+
+      - name: step5-update-elasticsearch
+        template: update-elasticsearch
+        dependencies: [step4-index-embeddings, step0c-incremental-embedding-refresh]
+        arguments:
+          parameters:
+          - name: es-uri
+            value: "{{workflow.parameters.es-uri}}"
+          - name: es-api-key
+            value: "{{workflow.parameters.es-api-key}}"
+          - name: embeddings-path
+            value: "{{tasks.step0c-incremental-embedding-refresh.outputs.parameters.embeddings-path}}"
+
+      - name: step6-switch-collections
+        template: switch-collections
+        dependencies: [step5-update-elasticsearch]
+        arguments:
+          parameters:
+          - name: milvus-uri
+            value: "{{workflow.parameters.milvus-uri}}"
+          - name: milvus-token
+            value: "{{workflow.parameters.milvus-token}}"
+          - name: movie-collection
+            value: "{{tasks.step3-create-new-collections.outputs.parameters.movie-collection}}"
+          - name: user-collection
+            value: "{{tasks.step3-create-new-collections.outputs.parameters.user-collection}}"
+
+      - name: step7-health-check
+        template: health-check
+        dependencies: [step6-switch-collections]
+        arguments:
+          parameters:
+          - name: milvus-uri
+            value: "{{workflow.parameters.milvus-uri}}"
+          - name: milvus-token
+            value: "{{workflow.parameters.milvus-token}}"
+          - name: movie-collection
+            value: "{{tasks.step3-create-new-collections.outputs.parameters.movie-collection}}"
+          - name: user-collection
+            value: "{{tasks.step3-create-new-collections.outputs.parameters.user-collection}}"
+
+      - name: step8-update-serving-config
+        template: update-serving-config
+        dependencies: [step7-health-check]
+        arguments:
+          parameters:
+          - name: serving-config-path
+            value: "{{workflow.parameters.serving-config-path}}"
+          - name: bundle-version
+            value: "{{tasks.step1-fetch-model-info.outputs.parameters.MODEL_VERSION}}"
+          - name: gnn-run-id
+            value: "{{tasks.step1-fetch-model-info.outputs.parameters.MODEL_RUN_ID}}"
+          - name: embeddings-path
+            value: "{{tasks.step0c-incremental-embedding-refresh.outputs.parameters.embeddings-path}}"
+          - name: movie-collection
+            value: "{{tasks.step3-create-new-collections.outputs.parameters.movie-collection}}"
+          - name: snapshot-id
+            value: "{{tasks.step0c-incremental-embedding-refresh.outputs.parameters.snapshot-id}}"
+          - name: s3-base-path
+            value: "{{workflow.parameters.s3-base-path}}"
+
+      - name: step10-rollout-serving
+        template: rollout-serving-restart
+        dependencies: [step8-update-serving-config]
+        arguments:
+          parameters:
+          - name: serving-namespace
+            value: "{{workflow.parameters.serving-namespace}}"
+          - name: serving-deployment
+            value: "{{workflow.parameters.serving-deployment}}"
+
+      - name: step9-cleanup-old-collections
+        template: cleanup-collections
+        dependencies: [step7-health-check]
+        arguments:
+          parameters:
+          - name: milvus-uri
+            value: "{{workflow.parameters.milvus-uri}}"
+          - name: milvus-token
+            value: "{{workflow.parameters.milvus-token}}"
+          - name: retention-days
+            value: "{{workflow.parameters.collection-retention-days}}"
+
+  # Template: Fetch Model Info from MLflow
+  - name: fetch-model-info
+    inputs:
+      parameters:
+      - name: mlflow-tracking-uri
+      - name: gnn-model-name
+      - name: gnn-model-alias
+      - name: gnn-model-version-override
+    script:
+      image: "{{workflow.parameters.registry}}/mlflow-client:latest"
+      command: ["python"]
+      source: |
+        import os
+        from mlflow import MlflowClient
+
+        _corr = "{{workflow.parameters.correlation-id}}"
+        if _corr:
+            print(f"[CORRELATION] {_corr}")
+
+        tracking_uri = "{{inputs.parameters.mlflow-tracking-uri}}"
+        model_name = "{{inputs.parameters.gnn-model-name}}"
+        alias = "{{inputs.parameters.gnn-model-alias}}"
+        version_override = "{{inputs.parameters.gnn-model-version-override}}"
+
+        client = MlflowClient(tracking_uri=tracking_uri)
+
+        if version_override and version_override.strip():
+            model_version = client.get_model_version(model_name, version_override)
+            model_uri = f"models:/{model_name}/{version_override}"
+        else:
+            model_version = client.get_model_version_by_alias(model_name, alias)
+            model_uri = f"models:/{model_name}@{alias}"
+
+        run = client.get_run(model_version.run_id)
+        tags = run.data.tags
+        params = run.data.params
+
+        feature_file = tags.get("feature_file") or params.get("feature_file", "")
+        data_prep_path = (tags.get("data_prep_path")
+                          or params.get("data_path_data_prep", ""))
+
+        if not feature_file:
+            raise ValueError(
+                f"feature_file tag/param missing on MLflow run {model_version.run_id}."
+            )
+        if not data_prep_path:
+            raise ValueError(
+                f"data_prep_path tag/param missing on MLflow run {model_version.run_id}."
+            )
+
+        os.makedirs("/tmp/outputs", exist_ok=True)
+        with open("/tmp/outputs/model-s3-path", "w") as f:
+            f.write(model_uri)
+        with open("/tmp/outputs/MODEL_VERSION", "w") as f:
+            f.write(model_version.version)
+        with open("/tmp/outputs/MODEL_VERSION_ID", "w") as f:
+            f.write(model_version.version)
+        with open("/tmp/outputs/MODEL_RUN_ID", "w") as f:
+            f.write(model_version.run_id)
+        with open("/tmp/outputs/FEATURE_FILE", "w") as f:
+            f.write(feature_file)
+        with open("/tmp/outputs/DATA_PREP_PATH", "w") as f:
+            f.write(data_prep_path)
+
+        print(f"model-s3-path={model_uri} version={model_version.version}")
+        print(f"FEATURE_FILE={feature_file}")
+        print(f"DATA_PREP_PATH={data_prep_path}")
+
+    outputs:
+      parameters:
+      - name: model-s3-path
+        valueFrom:
+          path: /tmp/outputs/model-s3-path
+      - name: MODEL_VERSION
+        valueFrom:
+          path: /tmp/outputs/MODEL_VERSION
+      - name: MODEL_VERSION_ID
+        valueFrom:
+          path: /tmp/outputs/MODEL_VERSION_ID
+      - name: MODEL_RUN_ID
+        valueFrom:
+          path: /tmp/outputs/MODEL_RUN_ID
+      - name: FEATURE_FILE
+        valueFrom:
+          path: /tmp/outputs/FEATURE_FILE
+      - name: DATA_PREP_PATH
+        valueFrom:
+          path: /tmp/outputs/DATA_PREP_PATH
+
+  # Template: Incremental Feature Extraction
+  - name: incremental-feature-extraction
+    inputs:
+      parameters:
+      - name: config-path
+      - name: delta-output-path
+    container:
+      image: "{{workflow.parameters.registry}}/incremental-feature-extractor:latest"
+      command: ["python", "/app/main.py"]
+      args:
+        - "--config-path"
+        - "{{inputs.parameters.config-path}}"
+        - "--delta-output-path"
+        - "{{inputs.parameters.delta-output-path}}"
+        - "--use-postgres"
+      envFrom:
+        - secretRef: { name: aws-creds }
+
+  # Template: Incremental Embedding Refresh
+  - name: incremental-embedding-refresh
+    inputs:
+      parameters:
+      - name: interactions-path
+      - name: embeddings-base-path
+      - name: learning-rate
+      - name: epochs
+      - name: time-window
+    container:
+      image: "{{workflow.parameters.registry}}/train-jobs:latest"
+      command: ["python", "/app/src/training/incremental_embedding_refresh.py"]
+      args:
+        - "--interactions-path"
+        - "{{inputs.parameters.interactions-path}}"
+        - "--embeddings-base-path"
+        - "{{inputs.parameters.embeddings-base-path}}"
+        - "--learning-rate"
+        - "{{inputs.parameters.learning-rate}}"
+        - "--epochs"
+        - "{{inputs.parameters.epochs}}"
+        - "--time-window"
+        - "{{inputs.parameters.time-window}}"
+      envFrom:
+        - secretRef: { name: aws-creds }
+    outputs:
+      parameters:
+      - name: embeddings-path
+        valueFrom:
+          path: /tmp/outputs/embeddings-path
+      - name: snapshot-id
+        valueFrom:
+          path: /tmp/outputs/snapshot-id
+
+  # Template: Feast Materialization
+  - name: feast-materialization
+    inputs:
+      parameters:
+      - name: config-path
+    script:
+      image: "{{workflow.parameters.registry}}/incremental-feature-extractor:latest"
+      command: ["sh", "-c"]
+      source: |
+        END_TS=$(date -u +"%Y-%m-%dT%H:%M:%S")
+        echo "Running feast materialize-incremental up to ${END_TS}"
+        cd /app/src/feature_repo && feast materialize-incremental ${END_TS}
+      env:
+        - name: FEAST_REPO_PATH
+          value: "/app/src/feature_repo"
+      envFrom:
+        - secretRef: { name: aws-creds }
+
+  # Template: GNN Inference
+  - name: gnn-inference
+    inputs:
+      parameters:
+      - name: model-path
+      - name: s3-base-path
+      - name: workflow-name
+      - name: incremental-users-only
+      - name: config-path
+      - name: features-delta-path
+      - name: static-features-path
+    container:
+      image: "{{workflow.parameters.registry}}/train-jobs:latest"
+      command: ["python", "/app/src/training/inference_only.py"]
+      args:
+        - "--model-path"
+        - "{{inputs.parameters.model-path}}"
+        - "--feature-file"
+        - "{{inputs.parameters.s3-base-path}}/data-prep/features.pt"
+        - "--data-path-data-prep"
+        - "{{inputs.parameters.s3-base-path}}/data-prep"
+        - "--output-path"
+        - "{{inputs.parameters.s3-base-path}}/{{inputs.parameters.workflow-name}}/embeddings"
+        - "--incremental-mode"
+        - "--config-path"
+        - "{{inputs.parameters.config-path}}"
+        - "--features-delta-path"
+        - "{{inputs.parameters.features-delta-path}}"
+        - "--static-features-path"
+        - "{{inputs.parameters.static-features-path}}"
+      env:
+        - name: MLFLOW_TRACKING_URI
+          value: "{{workflow.parameters.mlflow-tracking-uri}}"
+      envFrom:
+        - secretRef: { name: aws-creds }
+    outputs:
+      parameters:
+      - name: embeddings-path
+        value: "{{inputs.parameters.s3-base-path}}/{{inputs.parameters.workflow-name}}/embeddings"
+
+  # Template: Create new Milvus collections (blue)
+  - name: create-milvus-collections
+    inputs:
+      parameters:
+      - name: milvus-uri
+      - name: milvus-token
+      - name: embeddings-path
+      - name: timestamp
+    script:
+      image: "{{workflow.parameters.registry}}/indexing:latest"
+      command: ["python"]
+      source: |
+        import sys
+        import os
+        from pymilvus import connections, utility
+
+        milvus_uri = "{{inputs.parameters.milvus-uri}}"
+        milvus_token = "{{inputs.parameters.milvus-token}}"
+        timestamp = "{{inputs.parameters.timestamp}}".split("/")[-1]
+
+        connections.connect("default", uri=milvus_uri, token=milvus_token)
+
+        movie_collection = f"movie_embeddings_{timestamp}"
+        user_collection = f"user_embeddings_{timestamp}"
+
+        print(f"movie-collection={movie_collection}")
+        print(f"user-collection={user_collection}")
+
+        os.makedirs("/tmp/outputs", exist_ok=True)
+        with open("/tmp/outputs/movie-collection", "w") as f:
+            f.write(movie_collection)
+        with open("/tmp/outputs/user-collection", "w") as f:
+            f.write(user_collection)
+
+    outputs:
+      parameters:
+      - name: movie-collection
+        valueFrom:
+          path: /tmp/outputs/movie-collection
+      - name: user-collection
+        valueFrom:
+          path: /tmp/outputs/user-collection
+
+  # Template: Index embeddings into new collections
+  - name: index-embeddings
+    inputs:
+      parameters:
+      - name: milvus-uri
+      - name: milvus-token
+      - name: embeddings-path
+      - name: movie-collection
+      - name: user-collection
+    container:
+      image: "{{workflow.parameters.registry}}/indexing:latest"
+      args:
+        - "--embeddings-path"
+        - "{{inputs.parameters.embeddings-path}}"
+        - "--milvus-uri"
+        - "{{inputs.parameters.milvus-uri}}"
+        - "--milvus-token"
+        - "{{inputs.parameters.milvus-token}}"
+        - "--movie-collection"
+        - "{{inputs.parameters.movie-collection}}"
+        - "--user-collection"
+        - "{{inputs.parameters.user-collection}}"
+        - "--create-collections"
+        - "true"
+      envFrom:
+        - secretRef: { name: aws-creds }
+
+  - name: cleanup-collections-before-create
+    inputs:
+      parameters:
+      - name: milvus-uri
+      - name: milvus-token
+      - name: max-collections
+    script:
+      image: "{{workflow.parameters.registry}}/indexing:latest"
+      command: ["python"]
+      source: |
+        import sys
+        import time
+        import traceback
+        from pymilvus import connections, Collection, utility
+
+        milvus_uri = "{{inputs.parameters.milvus-uri}}"
+        milvus_token = "{{inputs.parameters.milvus-token}}"
+        max_collections = int("{{inputs.parameters.max-collections}}")
+        target_limit = max(1, max_collections - 1)
+
+        def drop_collection_safe(name: str) -> None:
+            if not utility.has_collection(name):
+                print(f"[INFO] skip drop (already gone): {name}")
+                return
+            col = Collection(name)
+            try:
+                col.release()
+            except Exception as e:
+                print(f"[INFO] release {name} (non-fatal): {e}")
+            try:
+                col.drop()
+            except Exception:
+                utility.drop_collection(name)
+            time.sleep(0.5)
+
+        try:
+            connections.connect("default", uri=milvus_uri, token=milvus_token)
+            all_collections = sorted(utility.list_collections())
+            print(f"[INFO] Milvus collections total={len(all_collections)} max={max_collections}")
+
+            protected = {"movie_embeddings", "user_embeddings"}
+            candidates = [
+                c for c in all_collections
+                if (c.startswith("movie_embeddings_") or c.startswith("user_embeddings_"))
+                and c not in protected
+            ]
+
+            for _ in range(50):
+                if len(all_collections) <= target_limit or not candidates:
+                    break
+                to_drop = candidates.pop(0)
+                print(f"[INFO] pre-cleanup drop collection: {to_drop}")
+                drop_collection_safe(to_drop)
+                all_collections = sorted(utility.list_collections())
+                candidates = [
+                    c for c in all_collections
+                    if (c.startswith("movie_embeddings_") or c.startswith("user_embeddings_"))
+                    and c not in protected
+                ]
+
+            if len(all_collections) > target_limit:
+                print(
+                    f"[ERROR] still {len(all_collections)} collections (limit {target_limit}); "
+                    f"droppable prefix list exhausted. All: {all_collections}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
+            print(f"[INFO] Milvus collections after pre-cleanup: {len(all_collections)}")
+        except Exception:
+            traceback.print_exc()
+            raise
+        finally:
+            try:
+                connections.disconnect("default")
+            except Exception:
+                pass
+
+  - name: update-elasticsearch
+    inputs:
+      parameters:
+      - name: es-uri
+      - name: es-api-key
+      - name: embeddings-path
+    container:
+      image: "{{workflow.parameters.registry}}/indexing:latest"
+      args:
+        - "--embeddings-path"
+        - "{{inputs.parameters.embeddings-path}}"
+        - "--es-uri"
+        - "{{inputs.parameters.es-uri}}"
+        - "--es-api-key"
+        - "{{inputs.parameters.es-api-key}}"
+        - "--es-index"
+        - "recsys-movies"
+        - "--update-only"
+        - "true"
+      envFrom:
+        - secretRef: { name: aws-creds }
+
+  # Template: Switch collections (blue-green)
+  - name: switch-collections
+    inputs:
+      parameters:
+      - name: milvus-uri
+      - name: milvus-token
+      - name: movie-collection
+      - name: user-collection
+    script:
+      image: "{{workflow.parameters.registry}}/indexing:latest"
+      command: ["python"]
+      source: |
+        import sys
+        import os
+        sys.path.append('/app')
+        from scripts.switch_milvus_collections import switch_collections
+        
+        milvus_uri = "{{inputs.parameters.milvus-uri}}"
+        milvus_token = "{{inputs.parameters.milvus-token}}"
+        movie_collection = "{{inputs.parameters.movie-collection}}"
+        user_collection = "{{inputs.parameters.user-collection}}"
+        
+        switch_collections(
+            milvus_uri=milvus_uri,
+            milvus_token=milvus_token,
+            movie_collection=movie_collection,
+            user_collection=user_collection
+        )
+
+  # Template: Health check
+  - name: health-check
+    inputs:
+      parameters:
+      - name: milvus-uri
+      - name: milvus-token
+      - name: movie-collection
+      - name: user-collection
+    script:
+      image: "{{workflow.parameters.registry}}/indexing:latest"
+      command: ["python"]
+      source: |
+        import sys
+        from pymilvus import connections, Collection
+
+        milvus_uri = "{{inputs.parameters.milvus-uri}}"
+        milvus_token = "{{inputs.parameters.milvus-token}}"
+        movie_collection = "{{inputs.parameters.movie-collection}}"
+        user_collection = "{{inputs.parameters.user-collection}}"
+        
+        connections.connect("default", uri=milvus_uri, token=milvus_token)
+        
+        for col_name in [movie_collection, user_collection]:
+          try:
+            col = Collection(col_name)
+            col.load()
+            num_entities = col.num_entities
+            print(f"Collection {col_name}: {num_entities} entities")
+            if num_entities == 0:
+              raise Exception(f"Collection {col_name} is empty")
+          except Exception as e:
+            print(f"Health check failed for {col_name}: {e}")
+            sys.exit(1)
+        
+        print("Health check passed")
+
+  # Cron-flavor: writes only embeddings/milvus/snapshot fields to S3 serving_config.yaml.
+  - name: update-serving-config
+    inputs:
+      parameters:
+      - name: serving-config-path
+      - name: bundle-version
+      - name: gnn-run-id
+      - name: embeddings-path
+      - name: movie-collection
+      - name: snapshot-id
+      - name: s3-base-path
+    script:
+      image: python:3.11-slim
+      command: ["python"]
+      source: |
+        import subprocess, sys
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "boto3", "pyyaml"])
+
+        import yaml
+        import boto3
+        from datetime import datetime, timezone
+
+        s3_config_path = "{{inputs.parameters.serving-config-path}}"
+        bundle_version = "{{inputs.parameters.bundle-version}}"
+        gnn_run_id = "{{inputs.parameters.gnn-run-id}}"
+        embeddings_path = "{{inputs.parameters.embeddings-path}}"
+        movie_collection = "{{inputs.parameters.movie-collection}}"
+        snapshot_id = "{{inputs.parameters.snapshot-id}}"
+        s3_base_path = "{{inputs.parameters.s3-base-path}}"
+
+        s3 = boto3.client("s3")
+
+        def _parse_s3(s3_url):
+            parts = s3_url.replace("s3://", "").split("/", 1)
+            return parts[0], parts[1] if len(parts) > 1 else ""
+
+        cfg_bucket, cfg_key = _parse_s3(s3_config_path)
+        try:
+            obj = s3.get_object(Bucket=cfg_bucket, Key=cfg_key)
+            config = yaml.safe_load(obj["Body"].read().decode("utf-8")) or {}
+        except Exception:
+            print("WARNING: serving_config.yaml not found in S3, starting from empty config.")
+            config = {}
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        # Cron updates embeddings + snapshot + milvus only (no model/training_lineage churn).
+        config.setdefault("embeddings", {})
+        config["embeddings"]["user_emb"] = f"{embeddings_path}/user_embeddings.parquet"
+        config["embeddings"]["item_emb"] = f"{embeddings_path}/movie_embeddings.parquet"
+        config["embeddings"]["current_snapshot_id"] = snapshot_id
+        config["embeddings"]["last_refresh_time"] = now
+
+        config.setdefault("milvus", {})
+        config["milvus"]["movie_collection"] = movie_collection
+
+        s3.put_object(
+            Bucket=cfg_bucket,
+            Key=cfg_key,
+            Body=yaml.dump(config, default_flow_style=False),
+            ContentType="application/x-yaml",
+        )
+        print(f"serving_config.yaml updated at s3://{cfg_bucket}/{cfg_key}")
+        print(f"Bundle v{bundle_version} | snapshot={snapshot_id} | embeddings={embeddings_path}")
+      envFrom:
+        - secretRef: { name: aws-creds }
+
+  - name: rollout-serving-restart
+    inputs:
+      parameters:
+      - name: serving-namespace
+      - name: serving-deployment
+    script:
+      image: bitnami/kubectl:latest   # kubectl pre-installed, không cần download
+      command: ["sh", "-c"]
+      source: |
+        set -eu
+        NS="{{inputs.parameters.serving-namespace}}"
+        DEPLOY="{{inputs.parameters.serving-deployment}}"
+        kubectl rollout restart "deployment/${DEPLOY}" -n "${NS}"
+        kubectl rollout status "deployment/${DEPLOY}" -n "${NS}" --timeout=300s
+
+  - name: cleanup-collections
+    inputs:
+      parameters:
+      - name: milvus-uri
+      - name: milvus-token
+      - name: retention-days
+    script:
+      image: "{{workflow.parameters.registry}}/indexing:latest"
+      command: ["python"]
+      source: |
+        import sys
+        from pymilvus import connections, utility
+        from datetime import datetime, timedelta
+        import re
+
+        milvus_uri = "{{inputs.parameters.milvus-uri}}"
+        milvus_token = "{{inputs.parameters.milvus-token}}"
+        retention_days = int("{{inputs.parameters.retention-days}}")
+        
+        connections.connect("default", uri=milvus_uri, token=milvus_token)
+        
+        all_collections = utility.list_collections()
+        cutoff_date = datetime.now() - timedelta(days=retention_days)
+        
+        for col_name in all_collections:
+          if col_name in ["movie_embeddings", "user_embeddings"]:
+            continue
+          
+          match = re.search(r'_(\d{14})$', col_name)
+          if match:
+            timestamp_str = match.group(1)
+            try:
+              col_date = datetime.strptime(timestamp_str, "%Y%m%d%H%M%S")
+              if col_date < cutoff_date:
+                print(f"Dropping old collection: {col_name}")
+                utility.drop_collection(col_name)
+            except ValueError:
+              print(f"Could not parse timestamp from {col_name}")

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: recsys-serving
+description: Helm chart for RecSys Serving API (FastAPI + Triton client)
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

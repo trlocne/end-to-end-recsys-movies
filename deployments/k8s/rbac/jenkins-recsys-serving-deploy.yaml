@@ -1,0 +1,33 @@
+# Lets Jenkins (SA jenkins/default) apply serving Deployment + Service in namespace serving.
+# Prerequisite: namespace serving exists (cluster admin: kubectl create namespace serving).
+#   kubectl apply -f deployments/k8s/rbac/jenkins-recsys-serving-deploy.yaml
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jenkins-recsys-serving-deploy
+  namespace: serving
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/status", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-recsys-serving-deploy
+  namespace: serving
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: jenkins-recsys-serving-deploy
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: jenkins

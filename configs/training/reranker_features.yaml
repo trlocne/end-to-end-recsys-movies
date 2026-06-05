@@ -1,0 +1,32 @@
+model_type: "reranker"
+description: "Feature config for ReRanker full retraining"
+
+feature_refs:
+  user:
+    - "user_stats:avg_rating"
+    - "user_stats:interaction_count"
+    - "user_stats:rating_std"
+    - "user_genres:top_genres"
+    - "user_genres:genre_vector"
+    - "user_recent_interactions:recent_movie_ids"
+    - "user_recent_interactions:recent_ratings"
+    - "user_embeddings:embedding"
+  movie:
+    - "movie_stats:popularity"
+    - "movie_stats:avg_rating"
+    - "movie_stats:rating_std"
+    - "movie_embeddings:embedding"
+
+base_data:
+  source: "feast"
+  interactions_path: ""
+  min_rating: 0.0
+  min_interactions: 0
+
+time_range:
+  start_date: null
+  end_date: null
+
+output:
+  format: "parquet"
+  path: "s3://recsys-moivelens/processed/training_data/reranker/"

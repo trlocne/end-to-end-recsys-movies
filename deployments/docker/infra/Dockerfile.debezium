@@ -1,0 +1,9 @@
+FROM debezium/connect:2.5.0.Final
+
+# PostgreSQL connector is already included in debezium/connect image
+# Just set environment variables for Aiven SSL certificates
+ENV KAFKA_CONNECT_BOOTSTRAP_SERVERS=""
+ENV KAFKA_CONNECT_SSL_KEYSTORE_PASSWORD="changeit"
+
+# Create directory for SSL certificates in /kafka
+RUN mkdir -p /kafka/certs

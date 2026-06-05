@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recsys-ui
+  namespace: serving
+  labels:
+    app: recsys-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: recsys-ui
+  template:
+    metadata:
+      labels:
+        app: recsys-ui
+    spec:
+      containers:
+        - name: recsys-ui
+          image: trlocne204/recsys-ui:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: RECSYS_API_BASE_URL
+              value: "http://serving:8000"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: recsys-ui
+  namespace: serving
+spec:
+  type: LoadBalancer
+  selector:
+    app: recsys-ui
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000

@@ -1,0 +1,113 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: debezium-connector-register
+  namespace: infra
+  annotations:
+    description: "Registers the Debezium PostgreSQL connector with Kafka Connect REST API"
+spec:
+  ttlSecondsAfterFinished: 300
+  backoffLimit: 5
+  template:
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+      - name: wait-for-kafka-connect
+        image: busybox:1.36
+        command:
+        - sh
+        - -c
+        - |
+          echo "Waiting for Kafka Connect to be ready..."
+          until wget -qO- http://kafka-connect.infra.svc.cluster.local:8083/connectors > /dev/null 2>&1; do
+            echo "Kafka Connect not ready yet, retrying in 5s..."
+            sleep 5
+          done
+          echo "Kafka Connect is ready!"
+      containers:
+      - name: register-connector
+        image: curlimages/curl:8.6.0
+        env:
+        - name: DB_HOST
+          valueFrom:
+            secretKeyRef:
+              name: debezium-connector-secret
+              key: database-host
+        - name: DB_PORT
+          valueFrom:
+            secretKeyRef:
+              name: debezium-connector-secret
+              key: database-port
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: debezium-connector-secret
+              key: database-user
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: debezium-connector-secret
+              key: database-password
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: debezium-connector-secret
+              key: database-name
+        command:
+        - sh
+        - -c
+        - |
+          set -e
+          CONNECT_URL="http://kafka-connect.infra.svc.cluster.local:8083"
+          CONNECTOR_NAME="postgres-connector"
+
+          # Inject credentials vao config
+          CONFIG=$(sed \
+            -e "s|__DB_HOST__|${DB_HOST}|g" \
+            -e "s|__DB_PORT__|${DB_PORT}|g" \
+            -e "s|__DB_USER__|${DB_USER}|g" \
+            -e "s|__DB_PASSWORD__|${DB_PASSWORD}|g" \
+            -e "s|__DB_NAME__|${DB_NAME}|g" \
+            /config/connector-config.json)
+
+          echo "Checking if connector '${CONNECTOR_NAME}' already exists..."
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            ${CONNECT_URL}/connectors/${CONNECTOR_NAME})
+
+          if [ "$HTTP_STATUS" = "200" ]; then
+            echo "Connector already exists. Updating config..."
+            curl -s -X DELETE ${CONNECT_URL}/connectors/${CONNECTOR_NAME}
+            echo "Deleted existing connector, re-registering..."
+            sleep 2
+          fi
+
+          echo "Registering connector..."
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "Content-Type: application/json" \
+            --data "${CONFIG}" \
+            ${CONNECT_URL}/connectors)
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+
+          echo "Response code: ${HTTP_CODE}"
+          echo "Response body: ${BODY}"
+
+          if [ "$HTTP_CODE" = "201" ]; then
+            echo "Connector registered successfully!"
+          else
+            echo "Failed to register connector (HTTP ${HTTP_CODE})"
+            exit 1
+          fi
+
+          echo "Verifying connector status..."
+          sleep 5
+          curl -s ${CONNECT_URL}/connectors/${CONNECTOR_NAME}/status | \
+            grep -o '"state":"[^"]*"' | head -5
+        volumeMounts:
+        - name: connector-config
+          mountPath: /config
+      volumes:
+      - name: connector-config
+        configMap:
+          name: debezium-connector-config

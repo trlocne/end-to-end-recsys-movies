@@ -1,0 +1,75 @@
+# Helm values cho Grafana Alloy
+# C�i b?ng: helm upgrade --install alloy grafana/alloy -n monitoring -f infrastructure/monitor/alloy/alloy.yaml
+
+controller:
+  type: daemonset
+
+rbac:
+  create: true
+
+serviceAccount:
+  create: true
+
+alloy:
+  extraEnv:
+    - name: NODE_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: spec.nodeName
+
+  configMap:
+    create: true
+    content: |
+      logging {
+        level  = "info"
+        format = "logfmt"
+      }
+
+      // Thu th?p logs t? t?t c? pod trong cluster
+      loki.source.kubernetes "pods" {
+        targets    = discovery.kubernetes.pods.targets
+        forward_to = [loki.write.endpoint.receiver]
+      }
+
+      // T? d?ng discovery pods
+      discovery.kubernetes "pods" {
+        role = "pod"
+      }
+
+      // G?n labels t? pod metadata
+      discovery.relabel "pods" {
+        targets = discovery.kubernetes.pods.targets
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app"]
+          target_label  = "app"
+        }
+        // Chỉ giữ các namespace liên quan đến recsys
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          regex         = "serving|mlflow|argo|kafka|infra|jenkins|monitoring"
+          action        = "keep"
+        }
+      }
+
+      loki.source.kubernetes "pods_filtered" {
+        targets    = discovery.relabel.pods.output
+        forward_to = [loki.write.endpoint.receiver]
+      }
+
+      loki.write "endpoint" {
+        endpoint {
+          url = "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push"
+        }
+      }

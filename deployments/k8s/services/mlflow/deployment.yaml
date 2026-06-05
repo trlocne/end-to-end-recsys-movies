@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlflow
+  namespace: mlflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mlflow
+  template:
+    metadata:
+      labels:
+        app: mlflow
+    spec:
+      containers:
+      - name: mlflow
+        image: trlocne204/mlflow-client:latest
+        ports:
+        - containerPort: 5000
+        env:
+        - name: BACKEND_STORE_URI
+          value: pg-30130064-seanhcmut05.c.aivencloud.com
+        - name: DEFAULT_ARTIFACT_ROOT
+          value: s3://mlflow-artifacts
+        volumeMounts:
+        - name: mlflow-storage
+          mountPath: /mlflow
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+      volumes:
+      - name: mlflow-storage
+        persistentVolumeClaim:
+          claimName: mlflow-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mlflow
+  namespace: mlflow
+spec:
+  selector:
+    app: mlflow
+  ports:
+  - name: http
+    port: 5000
+    targetPort: 5000
+    nodePort: 30500
+  type: LoadBalancer

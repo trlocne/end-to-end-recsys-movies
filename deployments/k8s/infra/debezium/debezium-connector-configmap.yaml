@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: debezium-connector-config
+  namespace: infra
+data:
+  connector-config.json: |
+    {
+      "name": "postgres-connector",
+      "config": {
+        "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+        "database.hostname": "__DB_HOST__",
+        "database.port": "__DB_PORT__",
+        "database.user": "__DB_USER__",
+        "database.password": "__DB_PASSWORD__",
+        "database.dbname": "__DB_NAME__",
+        "topic.prefix": "recsys-cdc",
+        "plugin.name": "pgoutput",
+        "table.include.list": "public.interactions,public.users,public.items",
+        "publication.name": "dbz_publication",
+        "publication.autocreate.mode": "disabled",
+        "slot.name": "debezium_docker",
+        "snapshot.mode": "initial",
+        "database.sslmode": "require",
+        "tombstones.on.delete": "false",
+        "key.converter": "io.confluent.connect.avro.AvroConverter",
+        "key.converter.schema.registry.url": "http://schema-reg.infra.svc.cluster.local:8081",
+        "value.converter": "io.confluent.connect.avro.AvroConverter",
+        "value.converter.schema.registry.url": "http://schema-reg.infra.svc.cluster.local:8081"
+      }
+    }

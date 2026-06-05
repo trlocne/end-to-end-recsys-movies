@@ -1,0 +1,18 @@
+{{- if .Values.serving.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "recsys-serving.fullname" . }}-serving
+  labels:
+    {{- include "recsys-serving.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.serving.service.type }}
+  ports:
+    - port: {{ .Values.serving.service.port }}
+      targetPort: {{ .Values.serving.service.targetPort }}
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "recsys-serving.selectorLabels" . | nindent 4 }}
+    app: recsys-serving
+{{- end }}

@@ -1,0 +1,81 @@
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: flink-cdc-ingest
+  namespace: infra
+spec:
+  restartNonce: 1778695000
+  image: trlocne204/flink-cdc:v70
+  imagePullPolicy: Always
+  flinkVersion: v1_20
+  flinkConfiguration:
+    taskmanager.numberOfTaskSlots: "2"
+    jobmanager.memory.process.size: "2048m"
+    taskmanager.memory.process.size: "2048m"
+    parallelism.default: "2"
+    state.backend: filesystem
+    state.checkpoints.dir: file:///tmp/flink_cdc_checkpoints
+    execution.checkpointing.interval: "60000"
+    env.java.opts.all: "--add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED"
+  serviceAccount: flink
+  podTemplate:
+    spec:
+      containers:
+      - name: flink-main-container
+        env:
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "kafka-kafka-bootstrap.kafka.svc.cluster.local:9092"
+        - name: FEAST_REPO_PATH
+          value: "/app/src/feature_repo"
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: aws-credentials
+              key: AWS_ACCESS_KEY_ID
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: aws-credentials
+              key: AWS_SECRET_ACCESS_KEY
+        - name: AWS_DEFAULT_REGION
+          value: "ap-southeast-1"
+        - name: S3_OFFLINE_BASE
+          value: "s3://recsys-moivelens/processed/feast-features"
+        - name: S3_PARQUET_FLUSH_EVERY
+          value: "1000"
+        - name: SESSION_WINDOW_MINUTES
+          value: "1"
+        - name: SCHEMA_REGISTRY_URL
+          value: "http://schema-reg.infra.svc.cluster.local:8081"
+  jobManager:
+    resource:
+      memory: "2048m"
+      cpu: 1
+  taskManager:
+    replicas: 1
+    resource:
+      memory: "2048m"
+      cpu: 1
+  job:
+    jarURI: local:///opt/flink/opt/flink-python_1.20.1.jar
+    entryClass: org.apache.flink.client.python.PythonDriver
+    args:
+      - "-py"
+      - "/opt/flink/usrlib/flink_ingest.py"
+    parallelism: 2
+    upgradeMode: stateless
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flink-cdc-ui
+  namespace: infra
+spec:
+  selector:
+    app: flink-cdc-ingest
+    component: jobmanager
+  type: ClusterIP
+  ports:
+  - name: ui
+    port: 8081
+    targetPort: 8081

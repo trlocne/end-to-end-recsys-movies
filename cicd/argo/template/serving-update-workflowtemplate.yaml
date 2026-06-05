@@ -332,7 +332,6 @@ spec:
 
         client = MlflowClient(tracking_uri=tracking_uri)
 
-        # ===== Fetch GNN Model Info =====
         if version_override and version_override.strip():
             model_version = client.get_model_version(model_name, version_override)
             # Use versioned URI so inference_only.py can download via MLflow client
@@ -345,11 +344,6 @@ spec:
         print(f"MODEL_VERSION={model_version.version}")
         print(f"MODEL_RUN_ID={model_version.run_id}")
 
-        # Fetch full run to extract explicit artifact path tags logged by training.
-        # These tags are set by _setup_mlflow in trainer_ray.py using keys:
-        #   feature_file     — full S3 path to features.pt
-        #   data_prep_path   — full S3 dir with train_df, users_map, etc.
-        # Params are also checked as fallback for older runs.
         run = client.get_run(model_version.run_id)
         tags = run.data.tags
         params = run.data.params
@@ -378,7 +372,6 @@ spec:
         print(f"EMBED_DIM={embed_dim}")
         print(f"NUM_LAYERS={num_layers}")
 
-        # ===== Fetch Reranker Model Info =====
         if reranker_version_override and reranker_version_override.strip():
             reranker_version = client.get_model_version(reranker_name, reranker_version_override)
         else:
@@ -406,8 +399,6 @@ spec:
         else:
             print("[WARN] reranker embed_dim missing; skipping GNN/rerank embed_dim contract check.")
 
-        # ===== Derive ONNX S3 path (must match deployments/helm/infra/jenkins/onnx_export.py) =====
-        # {s3-base-path}/{MODEL_NAME}/v{version}/reranker.onnx
         onnx_path = (
             f"{s3_base_path.rstrip('/')}/"
             f"{reranker_name}/"

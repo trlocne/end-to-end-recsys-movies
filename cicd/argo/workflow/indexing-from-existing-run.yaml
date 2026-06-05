@@ -1,0 +1,210 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: indexing-from-existing-
+  namespace: argo
+spec:
+  serviceAccountName: argo-workflow-sa
+  entrypoint: indexing-dag
+  arguments:
+    parameters:
+      - name: registry
+        value: "trlocne204"
+      - name: s3-run-path
+        value: "s3://recsys-moivelens/processed/runs/22035df6-1d32-4bb7-8fe8-d378fce89c0c"
+      - name: milvus-uri
+        value: "http://milvus.infra.svc.cluster.local:19530"
+      - name: milvus-token
+        value: ""
+      - name: milvus-collection
+        value: "movie_embeddings"
+      - name: milvus-max-collections
+        value: "5"
+      - name: es-uri
+        value: "http://elasticsearch.infra.svc.cluster.local:9200"
+      - name: es-api-key
+        value: ""
+      - name: es-index
+        value: "recsys-movies"
+      - name: mlflow-tracking-uri
+        value: "http://mlflow.mlflow.svc.cluster.local:5000"
+      - name: mlflow-experiment
+        value: "recsys-moivelens"
+      - name: registry-name-gnn
+        value: "Recsys-GNN"
+      - name: registry-name-rerank
+        value: "Recsys-ReRank"
+      - name: num-epochs-rerank
+        value: "10"
+      - name: tune-samples
+        value: "3"
+      - name: tune-epochs
+        value: "2"
+      - name: max-concurrent-trials
+        value: "4"
+      - name: batch-size
+        value: "256"
+      - name: rerank-num-workers
+        value: "4"
+      - name: lr-rerank
+        value: "1e-3"
+      - name: embed-dim-rerank
+        value: "128"
+      - name: dropout-rerank
+        value: "0.3"
+      - name: weight-decay-rerank
+        value: "1e-3"
+      - name: ray-data-parallelism
+        value: "2"
+      - name: use-reuse-actors
+        value: "false"
+      - name: skip-tune
+        value: "true"
+      - name: cpu-limit-head
+        value: "4"
+      - name: memory-limit-head
+        value: "8Gi"
+      - name: cpu-request-head
+        value: "2"
+      - name: memory-request-head
+        value: "4Gi"
+      - name: cpu-limit-worker
+        value: "4"
+      - name: memory-limit-worker
+        value: "8Gi"
+      - name: cpu-request-worker
+        value: "2"
+      - name: memory-request-worker
+        value: "4Gi"
+      - name: gpu-limit-worker
+        value: "0"
+      - name: gpu-request-worker
+        value: "0"
+      - name: model-name
+        value: "Recsys-ReRank"
+      - name: model-stage
+        value: "Staging"
+      - name: model-artifact-path
+        value: "reranker_model"
+      - name: metric-key
+        value: "val_loss"
+      - name: metric-threshold
+        value: "0.08"
+      - name: collection-retention-days
+        value: "7"
+      - name: serving-config-path
+        value: "s3://recsys-moivelens/processed/production/serving_config.yaml"
+      - name: serving-namespace
+        value: "serving"
+      - name: serving-deployment
+        value: "serving"
+      - name: use-gpu-triton
+        value: "false"
+      - name: gnn-model-name
+        value: "Recsys-GNN"
+      - name: reranker-model-name
+        value: "Recsys-ReRank"
+      - name: s3-base-path
+        value: "s3://recsys-moivelens/processed/dev"
+      - name: gnn-model-alias
+        value: "production"
+      - name: gnn-model-version-override
+        value: ""
+      - name: reranker-model-version-override
+        value: ""
+      - name: incremental-users-only
+        value: "true"
+      - name: incremental-config-path
+        value: "s3://recsys-moivelens/processed/production/incremental_config.yaml"
+      - name: correlation-id
+        value: "22035df6-1d32-4bb7-8fe8-d378fce89c0c"
+
+  templates:
+    - name: indexing-dag
+      dag:
+        tasks:
+          - name: run-indexing
+            templateRef:
+              name: training-template
+              template: run-python-step-template
+            arguments:
+              parameters:
+                - name: image
+                  value: "{{workflow.parameters.registry}}/indexing:latest"
+                - name: args
+                  value: >-
+                    --embedding-path {{workflow.parameters.s3-run-path}}/gnn_training/movie_embeddings.parquet
+                    --metadata-path {{workflow.parameters.s3-run-path}}/data_prep/movies_metadata.parquet
+                    --milvus-uri {{workflow.parameters.milvus-uri}}
+                    --milvus-collection {{workflow.parameters.milvus-collection}}
+                    --es-uri {{workflow.parameters.es-uri}}
+                    --es-index {{workflow.parameters.es-index}}
+
+          - name: run-reranker-training-cpu
+            depends: run-indexing
+            templateRef:
+              name: training-template
+              template: run-ray-job-cpu-template
+            arguments:
+              parameters:
+                - name: job-name
+                  value: "rnk-cpu-22035df6"
+                - name: image
+                  value: "{{workflow.parameters.registry}}/train-jobs:latest"
+                - name: entrypoint
+                  value: "python /app/train_reranker.py"
+                - name: num-workers
+                  value: "{{workflow.parameters.rerank-num-workers}}"
+                - name: args
+                  value: >-
+                    --data-path-glue {{workflow.parameters.s3-run-path}}/data_prep
+                    --data-path-data-prep {{workflow.parameters.s3-run-path}}/data_prep
+                    --feature-file {{workflow.parameters.s3-run-path}}/data_prep/features.pt
+                    --feature-rerank-file {{workflow.parameters.s3-run-path}}/data_prep/feature_rerank.pt
+                    --gnn-model {{workflow.parameters.s3-run-path}}/gnn_training/gnn.pt
+                    --model-output {{workflow.parameters.s3-run-path}}/reranker_output/reranker.pt
+                    --mlflow-uri {{workflow.parameters.mlflow-tracking-uri}}
+                    --mlflow-exp {{workflow.parameters.mlflow-experiment}}
+                    --name-registry {{workflow.parameters.registry-name-rerank}}
+                    --pipeline-run-id {{workflow.parameters.correlation-id}}
+                    --dataset-version {{workflow.parameters.s3-run-path}}
+                    --num-epochs {{workflow.parameters.num-epochs-rerank}}
+                    --tune-samples {{workflow.parameters.tune-samples}}
+                    --tune-epochs {{workflow.parameters.tune-epochs}}
+                    --max-concurrent-trials {{workflow.parameters.max-concurrent-trials}}
+                    --batch-size {{workflow.parameters.batch-size}}
+                    --num-workers {{workflow.parameters.rerank-num-workers}}
+                    --lr {{workflow.parameters.lr-rerank}}
+                    --embed-dim {{workflow.parameters.embed-dim-rerank}}
+                    --dropout {{workflow.parameters.dropout-rerank}}
+                    --weight-decay {{workflow.parameters.weight-decay-rerank}}
+                    --ray-data-parallelism {{workflow.parameters.ray-data-parallelism}}
+                    --skip-tune
+
+          - name: run-validate-release
+            depends: run-reranker-training-cpu
+            templateRef:
+              name: training-template
+              template: run-shell-step-template
+            arguments:
+              parameters:
+                - name: image
+                  value: "{{workflow.parameters.registry}}/train-jobs:latest"
+                - name: command
+                  value: "python scripts/validate_release.py"
+                - name: args
+                  value: ""
+
+          - name: run-promote-models
+            depends: run-validate-release
+            templateRef:
+              name: training-template
+              template: run-shell-step-template
+            arguments:
+              parameters:
+                - name: image
+                  value: "{{workflow.parameters.registry}}/train-jobs:latest"
+                - name: command
+                  value: "python scripts/promote_models.py"
+                - name: args
+                  value: ""

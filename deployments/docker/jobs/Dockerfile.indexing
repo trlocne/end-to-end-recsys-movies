@@ -1,0 +1,15 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY workflows/steps/indexing/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy all relevant source code
+COPY src/ /app/src/
+COPY scripts/ /app/scripts/
+COPY workflows/steps/indexing/main.py /app/main.py
+
+ENV PYTHONPATH=/app
+
+ENTRYPOINT ["python", "/app/main.py"]

@@ -170,10 +170,14 @@ class RecommendationService:
     def _get_user_recent_interactions(
         self, user_id: int, *, prefer_session: bool = True
     ) -> tuple[List[int], List[float]]:
-        # Same-pod clicks before background Postgres write: merge/rerank still use RAM.
-        if prefer_session and user_id in self.session_history:
-            h = self.session_history[user_id]
-            return h["ids"], h["ratings"]
+        # Check shared Redis session first (cross-pod), fallback to local RAM
+        if prefer_session:
+            redis_session = self.cache.get(f"session:{user_id}")
+            if redis_session:
+                return redis_session["ids"], redis_session["ratings"]
+            if user_id in self.session_history:
+                h = self.session_history[user_id]
+                return h["ids"], h["ratings"]
 
         try:
             ids, ratings = fetch_recent_interactions(user_id, limit=5)
@@ -344,8 +348,10 @@ class RecommendationService:
                  return candidates[:top_k]
             MODEL_INFERENCE_LATENCY.observe(time.time() - t_model)
 
-        for item, score in zip(candidates, scores): 
-            item["rerank_score"] = float(score)
+        s_min, s_max = float(scores.min()), float(scores.max())
+        score_range = s_max - s_min if s_max > s_min else 1.0
+        for item, score in zip(candidates, scores):
+            item["rerank_score"] = (float(score) - s_min) / score_range
         return sorted(candidates, key=lambda x: x.get("rerank_score", 0), reverse=True)
 
     def recommend_home(self, user_id: int, top_k: Optional[int] = None) -> Dict:
@@ -539,6 +545,12 @@ class RecommendationService:
         new_ids = (old_ids + [int(item_id)])[-5:]
         new_ratings = (old_ratings + [float(rating)])[-5:]
 
+        # Write to shared Redis so all pods see the updated session immediately
+        self.cache.set(
+            f"session:{user_id}",
+            {"ids": new_ids, "ratings": new_ratings},
+            ttl=3600,
+        )
         self.session_history[user_id] = {"ids": new_ids, "ratings": new_ratings}
         if self.feature_extractor:
             self.feature_extractor.watch_history[user_id] = [
