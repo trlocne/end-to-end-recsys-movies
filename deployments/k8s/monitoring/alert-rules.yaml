@@ -1,0 +1,198 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: recsys-alert-rules
+  namespace: monitoring
+  labels:
+    app: recsys-alerts
+spec:
+  groups:
+
+    - name: test
+      rules:
+        - alert: SlackAlertTest
+          expr: vector(1)
+          for: 0m
+          labels:
+            severity: warning
+            component: serving
+          annotations:
+            summary: "Test alert — Slack integration working. Safe to delete this rule."
+
+    - name: serving
+      rules:
+        - alert: ServingHighErrorRate
+          expr: |
+            sum(rate(http_requests_total{namespace="serving", status=~"5.."}[5m]))
+            / sum(rate(http_requests_total{namespace="serving"}[5m])) * 100 > 5
+          for: 2m
+          labels:
+            severity: critical
+            component: serving
+          annotations:
+            summary: "Serving error rate > 5% for 2m (current: {{ $value | printf \"%.1f\" }}%)"
+
+        - alert: ServingHighLatency
+          expr: |
+            histogram_quantile(0.95,
+              sum(rate(http_request_duration_seconds_bucket{namespace="serving"}[5m])) by (le)
+            ) * 1000 > 2000
+          for: 5m
+          labels:
+            severity: warning
+            component: serving
+          annotations:
+            summary: "Serving p95 latency > 2s (current: {{ $value | printf \"%.0f\" }}ms)"
+
+        - alert: ServingPodDown
+          expr: |
+            count(kube_pod_status_ready{namespace="serving", condition="true", pod=~"serving-.*"}) < 1
+          for: 1m
+          labels:
+            severity: critical
+            component: serving
+          annotations:
+            summary: "No serving pods ready in namespace serving"
+
+        - alert: ServingPodRestarting
+          expr: |
+            increase(kube_pod_container_status_restarts_total{namespace="serving"}[15m]) > 3
+          for: 0m
+          labels:
+            severity: warning
+            component: serving
+          annotations:
+            summary: "Pod {{ $labels.pod }} restarted {{ $value | printf \"%.0f\" }} times in 15m"
+
+    # ── Triton ─────────────────────────────────────────────────────────
+    - name: triton
+      rules:
+        - alert: TritonPodDown
+          expr: |
+            count(kube_pod_status_ready{namespace="serving", condition="true", pod=~"triton-.*"}) < 1
+          for: 1m
+          labels:
+            severity: critical
+            component: triton
+          annotations:
+            summary: "No Triton pods ready"
+
+        - alert: TritonHighInferenceLatency
+          expr: |
+            histogram_quantile(0.95,
+              sum(rate(nv_inference_request_duration_us_bucket{namespace="serving"}[5m])) by (le, model)
+            ) / 1000 > 500
+          for: 5m
+          labels:
+            severity: warning
+            component: triton
+          annotations:
+            summary: "Triton model {{ $labels.model }} p95 latency > 500ms"
+
+        - alert: TritonHighFailureRate
+          expr: |
+            sum(rate(nv_inference_request_failure{namespace="serving"}[5m])) by (model) > 0.1
+          for: 2m
+          labels:
+            severity: critical
+            component: triton
+          annotations:
+            summary: "Triton model {{ $labels.model }} failing > 0.1 req/s"
+
+    # ── MLflow ─────────────────────────────────────────────────────────
+    - name: mlflow
+      rules:
+        - alert: MLflowDown
+          expr: |
+            count(kube_pod_status_ready{namespace="mlflow", condition="true", pod=~"mlflow-.*"}) < 1
+          for: 2m
+          labels:
+            severity: critical
+            component: serving
+          annotations:
+            summary: "MLflow server is down"
+
+        - alert: PostgresDown
+          expr: |
+            count(kube_pod_status_ready{namespace="mlflow", condition="true", pod=~"postgres-.*"}) < 1
+          for: 1m
+          labels:
+            severity: critical
+            component: serving
+          annotations:
+            summary: "MLflow Postgres is down"
+
+    # ── Data Pipeline ──────────────────────────────────────────────────
+    - name: data-pipeline
+      rules:
+        - alert: KafkaConsumerLagHigh
+          expr: |
+            sum(kafka_consumergroup_lag{namespace="kafka"}) by (consumergroup, topic) > 10000
+          for: 10m
+          labels:
+            severity: warning
+            component: feast
+          annotations:
+            summary: "Kafka consumer {{ $labels.consumergroup }} lag > 10k on {{ $labels.topic }}"
+
+        - alert: FlinkJobNotRunning
+          expr: |
+            absent(flink_jobmanager_job_uptime{namespace="infra"}) or
+            flink_jobmanager_job_uptime{namespace="infra"} == 0
+          for: 5m
+          labels:
+            severity: critical
+            component: feast
+          annotations:
+            summary: "Flink CDC job is not running"
+
+        - alert: DebeziumConnectorFailed
+          expr: |
+            kafka_connect_connector_status{namespace="infra", status!="RUNNING"} == 1
+          for: 2m
+          labels:
+            severity: critical
+            component: feast
+          annotations:
+            summary: "Debezium connector {{ $labels.connector }} is not RUNNING"
+
+    # ── Infrastructure ─────────────────────────────────────────────────
+    - name: infrastructure
+      rules:
+        - alert: NodeHighCPU
+          expr: |
+            100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Node {{ $labels.instance }} CPU > 85% for 10m"
+
+        - alert: NodeHighMemory
+          expr: |
+            (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 90
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Node {{ $labels.instance }} memory > 90%"
+
+        - alert: PVCAlmostFull
+          expr: |
+            (kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes) * 100 > 85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "PVC {{ $labels.persistentvolumeclaim }} ({{ $labels.namespace }}) is {{ $value | printf \"%.0f\" }}% full"
+
+        - alert: PodCrashLooping
+          expr: |
+            increase(kube_pod_container_status_restarts_total{
+              namespace=~"serving|mlflow|argo|kafka|infra"
+            }[15m]) > 5
+          for: 0m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pod {{ $labels.pod }} in {{ $labels.namespace }} is crash looping ({{ $value | printf \"%.0f\" }} restarts in 15m)"
