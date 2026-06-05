@@ -1,0 +1,6 @@
+# Nhẹ / hay chỉnh — chỉ layer này chạy lại khi sửa deps API.
+fastapi
+uvicorn
+PyYAML
+prometheus-fastapi-instrumentator
+redis
