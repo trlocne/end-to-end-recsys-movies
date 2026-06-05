@@ -49,27 +49,12 @@ kind: Service
 metadata:
   name: serving
   namespace: serving
-  annotations:
-    # DOKS REGIONAL_NETWORK NLB opens node :10256 for kube-proxy checks (not your app).
-    # Override probes the Service port + /health (see DO "Health Checks" + override-health-check).
-    # https://docs.digitalocean.com/products/kubernetes/how-to/configure-load-balancers/
-    service.beta.kubernetes.io/do-loadbalancer-type: "REGIONAL_NETWORK"
-    service.beta.kubernetes.io/do-loadbalancer-override-health-check: "true"
-    service.beta.kubernetes.io/do-loadbalancer-healthcheck-port: "8000"
-    service.beta.kubernetes.io/do-loadbalancer-healthcheck-protocol: "http"
-    service.beta.kubernetes.io/do-loadbalancer-healthcheck-path: "/health"
-    service.beta.kubernetes.io/do-loadbalancer-healthcheck-check-interval-seconds: "3"
-    service.beta.kubernetes.io/do-loadbalancer-healthcheck-response-timeout-seconds: "5"
-    service.beta.kubernetes.io/do-loadbalancer-healthcheck-unhealthy-threshold: "3"
-    service.beta.kubernetes.io/do-loadbalancer-healthcheck-healthy-threshold: "5"
 spec:
-  type: LoadBalancer
-  externalTrafficPolicy: Cluster
+  type: ClusterIP
   selector:
     app: serving
   ports:
   - name: http
     port: 8000
     targetPort: 8000
-    nodePort: 31880
     protocol: TCP
