@@ -1,0 +1,99 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-training
+  namespace: monitoring
+  labels:
+    grafana-dashboard: "true"
+data:
+  training.json: |
+    {
+      "title": "RecSys Training Pipeline",
+      "uid": "recsys-training",
+      "tags": ["recsys", "training", "mlflow"],
+      "timezone": "browser",
+      "refresh": "1m",
+      "time": { "from": "now-6h", "to": "now" },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Argo Workflow Status",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "sum(argo_workflows_count{namespace=\"argo\", phase=\"Running\"})",
+              "legendFormat": "Running"
+            },
+            {
+              "expr": "sum(argo_workflows_count{namespace=\"argo\", phase=\"Succeeded\"})",
+              "legendFormat": "Succeeded"
+            },
+            {
+              "expr": "sum(argo_workflows_count{namespace=\"argo\", phase=\"Failed\"})",
+              "legendFormat": "Failed"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "title": "Argo Workflow Duration (s)",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+          "targets": [{
+            "expr": "argo_workflows_duration_seconds{namespace=\"argo\"}",
+            "legendFormat": "{{ name }}"
+          }]
+        },
+        {
+          "id": 3,
+          "title": "Ray CPU Usage (argo ns)",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+          "targets": [{
+            "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"argo\"}[1m])) by (pod)",
+            "legendFormat": "{{ pod }}"
+          }]
+        },
+        {
+          "id": 4,
+          "title": "Ray Memory Usage (argo ns)",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+          "targets": [{
+            "expr": "sum(container_memory_working_set_bytes{namespace=\"argo\"}) by (pod) / 1024 / 1024",
+            "legendFormat": "{{ pod }} (MiB)"
+          }]
+        },
+        {
+          "id": 5,
+          "title": "MLflow Active Runs",
+          "type": "stat",
+          "gridPos": { "x": 0, "y": 16, "w": 6, "h": 4 },
+          "targets": [{
+            "expr": "mlflow_runs_active_total",
+            "legendFormat": "active runs"
+          }]
+        },
+        {
+          "id": 6,
+          "title": "Training Pod Restarts",
+          "type": "stat",
+          "gridPos": { "x": 6, "y": 16, "w": 6, "h": 4 },
+          "targets": [{
+            "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"argo\"}[1h]))",
+            "legendFormat": "restarts (1h)"
+          }]
+        },
+        {
+          "id": 7,
+          "title": "Workflow Queue Depth",
+          "type": "stat",
+          "gridPos": { "x": 12, "y": 16, "w": 6, "h": 4 },
+          "targets": [{
+            "expr": "argo_queue_depth_count{namespace=\"argo\"}",
+            "legendFormat": "queued"
+          }]
+        }
+      ]
+    }

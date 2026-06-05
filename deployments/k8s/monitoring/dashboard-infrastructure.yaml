@@ -1,0 +1,105 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-infrastructure
+  namespace: monitoring
+  labels:
+    grafana-dashboard: "true"
+data:
+  infrastructure.json: |
+    {
+      "title": "RecSys Infrastructure",
+      "uid": "recsys-infra",
+      "tags": ["recsys", "infrastructure", "kubernetes"],
+      "timezone": "browser",
+      "refresh": "1m",
+      "time": { "from": "now-3h", "to": "now" },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Node CPU Usage (%)",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+          "targets": [{
+            "expr": "100 - (avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[1m])) * 100)",
+            "legendFormat": "{{ instance }}"
+          }]
+        },
+        {
+          "id": 2,
+          "title": "Node Memory Usage (%)",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+          "targets": [{
+            "expr": "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100",
+            "legendFormat": "{{ instance }}"
+          }]
+        },
+        {
+          "id": 3,
+          "title": "CPU Usage by Namespace",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+          "targets": [{
+            "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=~\"serving|mlflow|argo|kafka|infra|monitoring\"}[1m])) by (namespace)",
+            "legendFormat": "{{ namespace }}"
+          }]
+        },
+        {
+          "id": 4,
+          "title": "Memory Usage by Namespace (MiB)",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+          "targets": [{
+            "expr": "sum(container_memory_working_set_bytes{namespace=~\"serving|mlflow|argo|kafka|infra|monitoring\"}) by (namespace) / 1024 / 1024",
+            "legendFormat": "{{ namespace }}"
+          }]
+        },
+        {
+          "id": 5,
+          "title": "Pod Restarts (1h) by Namespace",
+          "type": "bargauge",
+          "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+          "targets": [{
+            "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=~\"serving|mlflow|argo|kafka|infra|monitoring\"}[1h])) by (namespace)",
+            "legendFormat": "{{ namespace }}"
+          }]
+        },
+        {
+          "id": 6,
+          "title": "Not Running Pods",
+          "type": "stat",
+          "gridPos": { "x": 12, "y": 16, "w": 6, "h": 4 },
+          "targets": [{
+            "expr": "count(kube_pod_status_phase{namespace=~\"serving|mlflow|argo|kafka|infra|monitoring\", phase!=\"Running\", phase!=\"Succeeded\"}) by (namespace, phase)",
+            "legendFormat": "{{ namespace }} / {{ phase }}"
+          }]
+        },
+        {
+          "id": 7,
+          "title": "PVC Usage (%)",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 24, "w": 24, "h": 8 },
+          "targets": [{
+            "expr": "(kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes) * 100",
+            "legendFormat": "{{ persistentvolumeclaim }} ({{ namespace }})"
+          }]
+        },
+        {
+          "id": 8,
+          "title": "Network In/Out (bytes/s)",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "sum(rate(container_network_receive_bytes_total{namespace=~\"serving|mlflow|argo\"}[1m])) by (namespace)",
+              "legendFormat": "in: {{ namespace }}"
+            },
+            {
+              "expr": "sum(rate(container_network_transmit_bytes_total{namespace=~\"serving|mlflow|argo\"}[1m])) by (namespace)",
+              "legendFormat": "out: {{ namespace }}"
+            }
+          ]
+        }
+      ]
+    }

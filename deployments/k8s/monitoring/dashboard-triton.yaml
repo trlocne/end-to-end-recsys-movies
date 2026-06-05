@@ -1,0 +1,89 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-triton
+  namespace: monitoring
+  labels:
+    grafana-dashboard: "true"
+data:
+  triton.json: |
+    {
+      "title": "RecSys Triton Inference",
+      "uid": "recsys-triton",
+      "tags": ["recsys", "triton"],
+      "timezone": "browser",
+      "refresh": "30s",
+      "time": { "from": "now-1h", "to": "now" },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Inference Request Rate (req/s)",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 0, "w": 8, "h": 8 },
+          "targets": [{
+            "expr": "sum(rate(nv_inference_request_success{namespace=\"serving\"}[1m])) by (model)",
+            "legendFormat": "{{ model }}"
+          }]
+        },
+        {
+          "id": 2,
+          "title": "Inference Latency p95 (ms)",
+          "type": "timeseries",
+          "gridPos": { "x": 8, "y": 0, "w": 8, "h": 8 },
+          "targets": [{
+            "expr": "histogram_quantile(0.95, sum(rate(nv_inference_request_duration_us_bucket{namespace=\"serving\"}[1m])) by (le, model)) / 1000",
+            "legendFormat": "{{ model }} p95"
+          }]
+        },
+        {
+          "id": 3,
+          "title": "Queue Depth",
+          "type": "timeseries",
+          "gridPos": { "x": 16, "y": 0, "w": 8, "h": 8 },
+          "targets": [{
+            "expr": "sum(nv_inference_queue_duration_us{namespace=\"serving\"}) by (model)",
+            "legendFormat": "{{ model }}"
+          }]
+        },
+        {
+          "id": 4,
+          "title": "GPU Utilization (%)",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+          "targets": [{
+            "expr": "nv_gpu_utilization{namespace=\"serving\"}",
+            "legendFormat": "GPU {{ gpu_uuid }}"
+          }]
+        },
+        {
+          "id": 5,
+          "title": "GPU Memory Used (MiB)",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+          "targets": [{
+            "expr": "nv_gpu_memory_used_bytes{namespace=\"serving\"} / 1024 / 1024",
+            "legendFormat": "GPU memory"
+          }]
+        },
+        {
+          "id": 6,
+          "title": "Failed Requests",
+          "type": "stat",
+          "gridPos": { "x": 0, "y": 16, "w": 6, "h": 4 },
+          "targets": [{
+            "expr": "sum(increase(nv_inference_request_failure{namespace=\"serving\"}[5m]))",
+            "legendFormat": "failures (5m)"
+          }]
+        },
+        {
+          "id": 7,
+          "title": "Model Load Status",
+          "type": "stat",
+          "gridPos": { "x": 6, "y": 16, "w": 6, "h": 4 },
+          "targets": [{
+            "expr": "nv_inference_count{namespace=\"serving\"}",
+            "legendFormat": "{{ model }}"
+          }]
+        }
+      ]
+    }

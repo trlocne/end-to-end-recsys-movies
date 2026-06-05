@@ -1,0 +1,101 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-data-pipeline
+  namespace: monitoring
+  labels:
+    grafana-dashboard: "true"
+data:
+  data-pipeline.json: |
+    {
+      "title": "RecSys Data Pipeline",
+      "uid": "recsys-data-pipeline",
+      "tags": ["recsys", "kafka", "flink", "feast"],
+      "timezone": "browser",
+      "refresh": "30s",
+      "time": { "from": "now-1h", "to": "now" },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Kafka Consumer Lag",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+          "targets": [{
+            "expr": "sum(kafka_consumergroup_lag{namespace=\"kafka\"}) by (consumergroup, topic)",
+            "legendFormat": "{{ consumergroup }} / {{ topic }}"
+          }]
+        },
+        {
+          "id": 2,
+          "title": "Kafka Messages In/s",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "sum(rate(kafka_server_brokertopicmetrics_messagesinpersec{namespace=\"kafka\"}[1m])) by (topic)",
+              "legendFormat": "in: {{ topic }}"
+            },
+            {
+              "expr": "sum(rate(kafka_server_brokertopicmetrics_bytesoutpersec{namespace=\"kafka\"}[1m])) by (topic)",
+              "legendFormat": "out: {{ topic }}"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "title": "Flink Job Status",
+          "type": "stat",
+          "gridPos": { "x": 0, "y": 8, "w": 6, "h": 4 },
+          "targets": [{
+            "expr": "flink_jobmanager_job_uptime{namespace=\"infra\"}",
+            "legendFormat": "uptime (ms)"
+          }]
+        },
+        {
+          "id": 4,
+          "title": "Flink Records In/s",
+          "type": "timeseries",
+          "gridPos": { "x": 6, "y": 8, "w": 9, "h": 8 },
+          "targets": [{
+            "expr": "sum(rate(flink_taskmanager_job_task_operator_numRecordsIn{namespace=\"infra\"}[1m]))",
+            "legendFormat": "records/s"
+          }]
+        },
+        {
+          "id": 5,
+          "title": "Flink Checkpoints",
+          "type": "timeseries",
+          "gridPos": { "x": 15, "y": 8, "w": 9, "h": 8 },
+          "targets": [
+            {
+              "expr": "flink_jobmanager_job_numberOfCompletedCheckpoints{namespace=\"infra\"}",
+              "legendFormat": "completed"
+            },
+            {
+              "expr": "flink_jobmanager_job_numberOfFailedCheckpoints{namespace=\"infra\"}",
+              "legendFormat": "failed"
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "title": "Debezium Connector Status",
+          "type": "stat",
+          "gridPos": { "x": 0, "y": 16, "w": 6, "h": 4 },
+          "targets": [{
+            "expr": "kafka_connect_connector_status{namespace=\"infra\"}",
+            "legendFormat": "{{ connector }}"
+          }]
+        },
+        {
+          "id": 7,
+          "title": "CDC Events/s (by table)",
+          "type": "timeseries",
+          "gridPos": { "x": 6, "y": 16, "w": 18, "h": 8 },
+          "targets": [{
+            "expr": "sum(rate(kafka_server_brokertopicmetrics_messagesinpersec{namespace=\"kafka\", topic=~\"recsys-cdc.*\"}[1m])) by (topic)",
+            "legendFormat": "{{ topic }}"
+          }]
+        }
+      ]
+    }

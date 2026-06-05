@@ -1,0 +1,99 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-serving
+  namespace: monitoring
+  labels:
+    grafana-dashboard: "true"
+data:
+  serving.json: |
+    {
+      "title": "RecSys Serving",
+      "uid": "recsys-serving",
+      "tags": ["recsys", "serving"],
+      "timezone": "browser",
+      "refresh": "30s",
+      "time": { "from": "now-1h", "to": "now" },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Request Rate (req/s)",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 0, "w": 8, "h": 8 },
+          "targets": [{
+            "expr": "sum(rate(http_requests_total{namespace=\"serving\", app=\"serving\"}[1m]))",
+            "legendFormat": "req/s"
+          }]
+        },
+        {
+          "id": 2,
+          "title": "Latency p50 / p95 / p99 (ms)",
+          "type": "timeseries",
+          "gridPos": { "x": 8, "y": 0, "w": 8, "h": 8 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{namespace=\"serving\"}[1m])) by (le)) * 1000",
+              "legendFormat": "p50"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{namespace=\"serving\"}[1m])) by (le)) * 1000",
+              "legendFormat": "p95"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{namespace=\"serving\"}[1m])) by (le)) * 1000",
+              "legendFormat": "p99"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "title": "Error Rate (%)",
+          "type": "timeseries",
+          "gridPos": { "x": 16, "y": 0, "w": 8, "h": 8 },
+          "targets": [{
+            "expr": "sum(rate(http_requests_total{namespace=\"serving\", status=~\"5..\"}[1m])) / sum(rate(http_requests_total{namespace=\"serving\"}[1m])) * 100",
+            "legendFormat": "error %"
+          }]
+        },
+        {
+          "id": 4,
+          "title": "Active Pods",
+          "type": "stat",
+          "gridPos": { "x": 0, "y": 8, "w": 4, "h": 4 },
+          "targets": [{
+            "expr": "count(kube_pod_status_ready{namespace=\"serving\", condition=\"true\"})",
+            "legendFormat": "pods ready"
+          }]
+        },
+        {
+          "id": 5,
+          "title": "CPU Usage (serving ns)",
+          "type": "timeseries",
+          "gridPos": { "x": 4, "y": 8, "w": 10, "h": 8 },
+          "targets": [{
+            "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"serving\"}[1m])) by (pod)",
+            "legendFormat": "{{ pod }}"
+          }]
+        },
+        {
+          "id": 6,
+          "title": "Memory Usage (serving ns)",
+          "type": "timeseries",
+          "gridPos": { "x": 14, "y": 8, "w": 10, "h": 8 },
+          "targets": [{
+            "expr": "sum(container_memory_working_set_bytes{namespace=\"serving\"}) by (pod) / 1024 / 1024",
+            "legendFormat": "{{ pod }} (MiB)"
+          }]
+        },
+        {
+          "id": 7,
+          "title": "Pod Restarts",
+          "type": "stat",
+          "gridPos": { "x": 0, "y": 12, "w": 4, "h": 4 },
+          "targets": [{
+            "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"serving\"})",
+            "legendFormat": "restarts"
+          }]
+        }
+      ]
+    }
