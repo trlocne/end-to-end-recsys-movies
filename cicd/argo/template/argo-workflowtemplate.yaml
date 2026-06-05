@@ -337,10 +337,10 @@ spec:
                     --embedding-path {{workflow.parameters.s3-run-path}}/gnn_training/movie_embeddings.parquet
                     --metadata-path {{workflow.parameters.s3-run-path}}/data_prep/movies_metadata.parquet
                     --milvus-uri {{workflow.parameters.milvus-uri}}
-                    --milvus-token {{workflow.parameters.milvus-token}}
+                    {{= workflow.parameters['milvus-token'] != '' ? '--milvus-token ' + workflow.parameters['milvus-token'] : ''}}
                     --milvus-collection {{workflow.parameters.milvus-collection}}
                     --es-uri {{workflow.parameters.es-uri}}
-                    --es-api-key {{workflow.parameters.es-api-key}}
+                    {{= workflow.parameters['es-api-key'] != '' ? '--es-api-key ' + workflow.parameters['es-api-key'] : ''}}
                     --es-index {{workflow.parameters.es-index}}
 
           - name: run-reranker-training-cpu
@@ -661,6 +661,10 @@ spec:
             value: "production"
           - name: CORRELATION_ID
             value: "{{workflow.uid}}"
+          - name: METRIC_KEY
+            value: "{{workflow.parameters.metric-key}}"
+          - name: METRIC_THRESHOLD
+            value: "{{workflow.parameters.metric-threshold}}"
           - name: GRAFANA_URL
             valueFrom:
               secretKeyRef:
@@ -716,7 +720,7 @@ spec:
                 rayStartParams:
                   dashboard-host: '0.0.0.0'
                   num-cpus: '0'
-                  object-store-memory: '2147483648' # 2Gi
+                  object-store-memory: '6442450944' # 6Gi
 
                 template:
                   spec:
@@ -757,7 +761,7 @@ spec:
                   groupName: train-group
                   rayStartParams:
                     num-cpus: "{{workflow.parameters.cpu-limit-worker}}"
-                    object-store-memory: '1610612736' # 1.5Gi
+                    object-store-memory: '3221225472' # 3Gi
                   template:
                     spec:
                       nodeSelector:
@@ -854,7 +858,7 @@ spec:
                 - replicas: {{inputs.parameters.num-workers}}
                   groupName: train-group
                   rayStartParams:
-                    object-store-memory: '1610612736' # 1.5Gi
+                    object-store-memory: '3221225472' # 3Gi
 
                   template:
                     spec:

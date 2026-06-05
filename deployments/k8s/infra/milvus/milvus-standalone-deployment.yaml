@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: milvus-standalone
+  namespace: infra
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: milvus-standalone
+  template:
+    metadata:
+      labels:
+        app: milvus-standalone
+    spec:
+      containers:
+      - name: milvus
+        image: milvusdb/milvus:v2.6.12
+        command: ["milvus", "run", "standalone"]
+        securityContext:
+          seccompProfile:
+            type: Unconfined
+        ports:
+        - containerPort: 19530
+        - containerPort: 9091
+        env:
+        - name: ETCD_ENDPOINTS
+          value: milvus-etcd:2379
+        - name: MINIO_ADDRESS
+          value: milvus-minio:9000
+        - name: MQ_TYPE
+          value: woodpecker
+        livenessProbe:
+          exec:
+            command:
+            - curl
+            - -f
+            - http://localhost:9091/healthz
+          initialDelaySeconds: 90
+          periodSeconds: 30
+          timeoutSeconds: 20
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: milvus
+  namespace: infra
+spec:
+  selector:
+    app: milvus-standalone
+  ports:
+  - name: grpc
+    port: 19530
+    targetPort: 19530
+  - name: metrics
+    port: 9091
+    targetPort: 9091
+  type: ClusterIP

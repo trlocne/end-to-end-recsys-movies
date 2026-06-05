@@ -1,0 +1,18 @@
+FROM pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
+
+LABEL version="1.0.0"
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y wget curl && rm -rf /var/lib/apt/lists/*
+
+COPY workflows/steps/train_jobs/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY src/ /app/src/
+COPY workflows/steps/train_gnn/main.py /app/train_gnn.py
+COPY workflows/steps/train_reranker/main.py /app/train_reranker.py
+COPY configs/ /app/configs/
+COPY scripts/ /app/scripts/
+
+ENV PYTHONPATH=/app

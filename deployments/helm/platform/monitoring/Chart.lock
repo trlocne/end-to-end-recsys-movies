@@ -8,5 +8,8 @@ dependencies:
 - name: alloy
   repository: https://grafana.github.io/helm-charts
   version: 0.9.1
-digest: sha256:c1402801da5d99472e717a6cb26583f307443acf00f20beba735d53e1afcc5d0
-generated: "2026-06-03T20:21:58.450575761Z"
+- name: tempo
+  repository: https://grafana.github.io/helm-charts
+  version: 1.10.3
+digest: sha256:bbf47506d253623a0f802cdc3541ea85d2d5018a0afcdbdb4d2639c65d042d9f
+generated: "2026-06-05T08:45:56.362938532Z"

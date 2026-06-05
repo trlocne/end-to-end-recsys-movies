@@ -1,0 +1,6 @@
+pymilvus
+elasticsearch>=8.0.0,<9.0.0
+pandas
+boto3
+pyarrow
+numpy<2.0.0

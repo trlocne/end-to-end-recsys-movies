@@ -14,7 +14,7 @@ spec:
           expr: vector(1)
           for: 0m
           labels:
-            severity: warning
+            severity: critical
             component: serving
           annotations:
             summary: "Test alert — Slack integration working. Safe to delete this rule."
