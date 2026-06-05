@@ -8,17 +8,6 @@ metadata:
 spec:
   groups:
 
-    - name: test
-      rules:
-        - alert: SlackAlertTest
-          expr: vector(1)
-          for: 0m
-          labels:
-            severity: critical
-            component: serving
-          annotations:
-            summary: "Test alert — Slack integration working. Safe to delete this rule."
-
     - name: serving
       rules:
         - alert: ServingHighErrorRate
@@ -196,3 +185,36 @@ spec:
             severity: critical
           annotations:
             summary: "Pod {{ $labels.pod }} in {{ $labels.namespace }} is crash looping ({{ $value | printf \"%.0f\" }} restarts in 15m)"
+
+    # ── Argo Workflows ─────────────────────────────────────────────────
+    - name: argo-workflows
+      rules:
+        - alert: ArgoWorkflowFailed
+          expr: |
+            increase(argo_workflows_count{namespace="argo", phase="Failed"}[5m]) > 0
+          for: 0m
+          labels:
+            severity: critical
+            component: serving
+          annotations:
+            summary: "Argo workflow failed in namespace argo"
+
+        - alert: ArgoWorkflowSucceeded
+          expr: |
+            increase(argo_workflows_count{namespace="argo", phase="Succeeded"}[5m]) > 0
+          for: 0m
+          labels:
+            severity: warning
+            component: serving
+          annotations:
+            summary: "Argo workflow completed successfully"
+
+        - alert: ArgoWorkflowRunningTooLong
+          expr: |
+            argo_workflows_duration_seconds{namespace="argo", phase="Running"} > 14400
+          for: 0m
+          labels:
+            severity: warning
+            component: serving
+          annotations:
+            summary: "Argo workflow {{ $labels.name }} has been running for {{ $value | printf \"%.0f\" }}s (> 4h)"

@@ -220,6 +220,13 @@ kube-prometheus-stack:
           - match:
               component: feast
             receiver: ml-team
+          - match:
+              alertname: ArgoWorkflowSucceeded
+            receiver: model-promote
+          - match:
+              alertname: ArgoWorkflowFailed
+            receiver: critical
+            continue: true
       receivers:
         - name: "null"
         - name: default
