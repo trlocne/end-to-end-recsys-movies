@@ -722,7 +722,6 @@ spec:
         print(f"[INFO] switch-collections: movie collection switched to {movie_collection}")
 
   - name: health-check
-  - name: health-check
     inputs:
       parameters:
       - name: registry
