@@ -41,7 +41,7 @@ class RecommendationService:
         es_client: Optional[Any] = None,
         top_k_candidates: int = 100,
         top_k_final: int = 10,
-        diversity_lambda: float = 0.5,
+        diversity_lambda: float = 0.7,
         es_index_name: str = "movies",
         feast_fs: Optional[Any] = None,
         metadata_df: Optional[pd.DataFrame] = None,
