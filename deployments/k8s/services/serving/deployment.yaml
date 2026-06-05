@@ -36,6 +36,8 @@ spec:
         envFrom:
         - secretRef:
             name: aws-creds
+        - secretRef:
+            name: serving-db-creds
         resources:
           requests:
             memory: "512Mi"
